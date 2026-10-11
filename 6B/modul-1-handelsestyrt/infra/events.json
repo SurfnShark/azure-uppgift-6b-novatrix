@@ -1,0 +1,57 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "functionName": {
+      "type": "string"
+    },
+    "sourceStorageName": {
+      "type": "string"
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "swedencentral"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.EventGrid/systemTopics",
+      "apiVersion": "2022-06-15",
+      "name": "topic-novatrix-6b",
+      "location": "[parameters('location')]",
+      "properties": {
+        "source": "[resourceId('Microsoft.Storage/storageAccounts', parameters('sourceStorageName'))]",
+        "topicType": "Microsoft.Storage.StorageAccounts"
+      }
+    },
+    {
+      "type": "Microsoft.EventGrid/systemTopics/eventSubscriptions",
+      "apiVersion": "2022-06-15",
+      "name": "topic-novatrix-6b/notify-on-ticket",
+      "dependsOn": [
+        "[resourceId('Microsoft.EventGrid/systemTopics', 'topic-novatrix-6b')]"
+      ],
+      "properties": {
+        "destination": {
+          "endpointType": "WebHook",
+          "properties": {
+            "endpointUrl": "[concat('https://', reference(resourceId('Microsoft.Web/sites', parameters('functionName')), '2024-04-01').defaultHostName, '/runtime/webhooks/blobs?functionName=Host.Functions.NotifyOnTicket&code=', listKeys(resourceId('Microsoft.Web/sites/host', parameters('functionName'), 'default'), '2024-04-01').systemKeys.blobs_extension)]"
+          }
+        },
+        "filter": {
+          "includedEventTypes": [
+            "Microsoft.Storage.BlobCreated"
+          ],
+          "subjectBeginsWith": "/blobServices/default/containers/arenden/blobs/",
+          "subjectEndsWith": "/arende.json",
+          "isSubjectCaseSensitive": true
+        },
+        "retryPolicy": {
+          "maxDeliveryAttempts": 10,
+          "eventTimeToLiveInMinutes": 60
+        },
+        "eventDeliverySchema": "EventGridSchema"
+      }
+    }
+  ]
+}

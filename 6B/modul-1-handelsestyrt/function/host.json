@@ -1,0 +1,14 @@
+{
+  "version": "2.0",
+  "functionTimeout": "00:02:00",
+  "extensionBundle": {
+    "id": "Microsoft.Azure.Functions.ExtensionBundle",
+    "version": "[4.0.0, 5.0.0)"
+  },
+  "extensions": {
+    "blobs": { "maxDegreeOfParallelism": 1 }
+  },
+  "logging": {
+    "logLevel": { "default": "Warning", "Function.NotifyOnTicket": "Information" }
+  }
+}

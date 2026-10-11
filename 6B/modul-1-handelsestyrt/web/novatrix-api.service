@@ -1,0 +1,22 @@
+[Unit]
+Description=Novatrix ticket API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/novatrix-api
+EnvironmentFile=/etc/novatrix-api.env
+ExecStart=/usr/bin/python3 /opt/novatrix-api/app.py
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+StateDirectory=novatrix-api
+StateDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

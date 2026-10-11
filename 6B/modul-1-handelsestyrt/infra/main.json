@@ -1,0 +1,459 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "swedencentral"
+    },
+    "vnetName": {
+      "type": "string",
+      "defaultValue": "vnet-novatrix"
+    },
+    "hostStorageName": {
+      "type": "string"
+    },
+    "sourceStorageName": {
+      "type": "string"
+    },
+    "functionName": {
+      "type": "string"
+    },
+    "deployerObjectId": {
+      "type": "string",
+      "defaultValue": ""
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "id-novatrix-6b",
+      "properties": {},
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups/securityRules",
+      "apiVersion": "2023-09-01",
+      "name": "nsg-novatrix-private/Allow-6B-Function-Storage-TLS",
+      "properties": {
+        "priority": 110,
+        "direction": "Inbound",
+        "access": "Allow",
+        "protocol": "Tcp",
+        "sourceAddressPrefix": "10.10.5.0/24",
+        "sourcePortRange": "*",
+        "destinationAddressPrefix": "10.10.2.0/24",
+        "destinationPortRange": "443"
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('hostStorageName')]",
+      "properties": {
+        "allowBlobPublicAccess": false,
+        "allowSharedKeyAccess": false,
+        "supportsHttpsTrafficOnly": true,
+        "minimumTlsVersion": "TLS1_2",
+        "publicNetworkAccess": "Enabled"
+      },
+      "location": "[parameters('location')]",
+      "kind": "StorageV2",
+      "sku": {
+        "name": "Standard_LRS"
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/queueServices/queues",
+      "apiVersion": "2023-05-01",
+      "name": "[concat(parameters('hostStorageName'), '/default/kundtjanst-notiser')]",
+      "properties": {},
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', parameters('hostStorageName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/queueServices/queues",
+      "apiVersion": "2023-05-01",
+      "name": "[concat(parameters('hostStorageName'), '/default/azure-webjobs-blobtrigger-', take(toLower(parameters('functionName')), 32))]",
+      "properties": {},
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', parameters('hostStorageName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/queueServices/queues",
+      "apiVersion": "2023-05-01",
+      "name": "[concat(parameters('sourceStorageName'), '/default/webjobs-blobtrigger-poison')]",
+      "properties": {
+        "metadata": {
+          "novatrix6b": "true"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2024-04-01",
+      "name": "plan-novatrix-6b",
+      "properties": {
+        "reserved": true
+      },
+      "location": "[parameters('location')]",
+      "kind": "functionapp",
+      "sku": {
+        "name": "B1",
+        "tier": "Basic",
+        "capacity": 1
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "apiVersion": "2023-09-01",
+      "name": "[concat(parameters('vnetName'), '/snet-novatrix-functions-clean')]",
+      "properties": {
+        "addressPrefix": "10.10.5.0/24",
+        "delegations": [
+          {
+            "name": "functions",
+            "properties": {
+              "serviceName": "Microsoft.Web/serverFarms"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2024-04-01",
+      "name": "[parameters('functionName')]",
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', 'plan-novatrix-6b')]",
+        "httpsOnly": true,
+        "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), 'snet-novatrix-functions-clean')]",
+        "siteConfig": {
+          "minTlsVersion": "1.2",
+          "linuxFxVersion": "Python|3.11",
+          "alwaysOn": true,
+          "vnetRouteAllEnabled": false,
+          "appSettings": [
+            {
+              "name": "AzureWebJobsStorage__accountName",
+              "value": "[parameters('hostStorageName')]"
+            },
+            {
+              "name": "AzureWebJobsStorage__credential",
+              "value": "managedidentity"
+            },
+            {
+              "name": "AzureWebJobsStorage__clientId",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '2023-01-31').clientId]"
+            },
+            {
+              "name": "TicketStorage__blobServiceUri",
+              "value": "[concat('https://', parameters('sourceStorageName'), '.blob.core.windows.net')]"
+            },
+            {
+              "name": "TicketStorage__queueServiceUri",
+              "value": "[concat('https://', parameters('sourceStorageName'), '.queue.core.windows.net')]"
+            },
+            {
+              "name": "TicketStorage__credential",
+              "value": "managedidentity"
+            },
+            {
+              "name": "TicketStorage__clientId",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '2023-01-31').clientId]"
+            },
+            {
+              "name": "NOTICE_QUEUE_URL",
+              "value": "[concat('https://', parameters('hostStorageName'), '.queue.core.windows.net/kundtjanst-notiser')]"
+            },
+            {
+              "name": "MANAGED_IDENTITY_CLIENT_ID",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '2023-01-31').clientId]"
+            },
+            {
+              "name": "FUNCTIONS_EXTENSION_VERSION",
+              "value": "~4"
+            },
+            {
+              "name": "FUNCTIONS_WORKER_RUNTIME",
+              "value": "python"
+            },
+            {
+              "name": "AzureWebJobsFeatureFlags",
+              "value": "EnableWorkerIndexing"
+            },
+            {
+              "name": "WEBSITE_VNET_ROUTE_ALL",
+              "value": "0"
+            },
+            {
+              "name": "WEBSITES_ENABLE_APP_SERVICE_STORAGE",
+              "value": "true"
+            },
+            {
+              "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
+              "value": "false"
+            }
+          ]
+        }
+      },
+      "location": "[parameters('location')]",
+      "kind": "functionapp,linux",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b')]": {}
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', 'plan-novatrix-6b')]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b')]",
+        "[resourceId('Microsoft.Storage/storageAccounts', parameters('hostStorageName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), 'snet-novatrix-functions-clean')]",
+        "[resourceId('Microsoft.Storage/storageAccounts/queueServices/queues', parameters('hostStorageName'), 'default', concat('azure-webjobs-blobtrigger-', take(toLower(parameters('functionName')), 32)))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites/config",
+      "apiVersion": "2024-04-01",
+      "name": "[concat(parameters('functionName'), '/appsettings')]",
+      "properties": {
+        "AzureWebJobsStorage__accountName": "[parameters('hostStorageName')]",
+        "AzureWebJobsStorage__credential": "managedidentity",
+        "AzureWebJobsStorage__clientId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '2023-01-31').clientId]",
+        "TicketStorage__blobServiceUri": "[concat('https://', parameters('sourceStorageName'), '.blob.core.windows.net')]",
+        "TicketStorage__queueServiceUri": "[concat('https://', parameters('sourceStorageName'), '.queue.core.windows.net')]",
+        "TicketStorage__credential": "managedidentity",
+        "TicketStorage__clientId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '2023-01-31').clientId]",
+        "NOTICE_QUEUE_URL": "[concat('https://', parameters('hostStorageName'), '.queue.core.windows.net/kundtjanst-notiser')]",
+        "MANAGED_IDENTITY_CLIENT_ID": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '2023-01-31').clientId]",
+        "FUNCTIONS_EXTENSION_VERSION": "~4",
+        "FUNCTIONS_WORKER_RUNTIME": "python",
+        "AzureWebJobsFeatureFlags": "EnableWorkerIndexing",
+        "WEBSITE_VNET_ROUTE_ALL": "0",
+        "WEBSITES_ENABLE_APP_SERVICE_STORAGE": "true",
+        "SCM_DO_BUILD_DURING_DEPLOYMENT": "false"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', parameters('functionName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('hostStorageName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "scope": "[concat('Microsoft.Storage/storageAccounts/', parameters('hostStorageName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b')]",
+        "[resourceId('Microsoft.Storage/storageAccounts', parameters('hostStorageName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('hostStorageName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '974c5e8b-45b9-4653-ba55-5f855dd0fb88')]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "scope": "[concat('Microsoft.Storage/storageAccounts/', parameters('hostStorageName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b')]",
+        "[resourceId('Microsoft.Storage/storageAccounts', parameters('hostStorageName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('hostStorageName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '17d1049b-9a84-46fb-8f53-869881c3d3ab')]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '17d1049b-9a84-46fb-8f53-869881c3d3ab')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "scope": "[concat('Microsoft.Storage/storageAccounts/', parameters('hostStorageName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b')]",
+        "[resourceId('Microsoft.Storage/storageAccounts', parameters('hostStorageName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('sourceStorageName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '974c5e8b-45b9-4653-ba55-5f855dd0fb88')]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "scope": "[concat('Microsoft.Storage/storageAccounts/', parameters('sourceStorageName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('sourceStorageName'), 'default', 'arenden'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b'), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "scope": "[concat('Microsoft.Storage/storageAccounts/', parameters('sourceStorageName'), '/blobServices/default/containers/arenden')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "privatelink.blob.core.windows.net",
+      "properties": {},
+      "location": "global"
+    },
+    {
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2020-06-01",
+      "name": "privatelink.blob.core.windows.net/novatrix-link",
+      "properties": {
+        "registrationEnabled": false,
+        "virtualNetwork": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]"
+        }
+      },
+      "location": "global",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.blob.core.windows.net')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-09-01",
+      "name": "pe-novatrix-6b-blob",
+      "properties": {
+        "subnet": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), 'snet-novatrix-private')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "novatrix-blob",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts', parameters('sourceStorageName'))]",
+              "groupIds": [
+                "blob"
+              ]
+            }
+          }
+        ]
+      },
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-09-01",
+      "name": "pe-novatrix-6b-blob/default",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "blob",
+            "properties": {
+              "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.blob.core.windows.net')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateEndpoints', 'pe-novatrix-6b-blob')]",
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.blob.core.windows.net')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "privatelink.queue.core.windows.net",
+      "properties": {},
+      "location": "global"
+    },
+    {
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2020-06-01",
+      "name": "privatelink.queue.core.windows.net/novatrix-link",
+      "properties": {
+        "registrationEnabled": false,
+        "virtualNetwork": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]"
+        }
+      },
+      "location": "global",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.queue.core.windows.net')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-09-01",
+      "name": "pe-novatrix-6b-queue",
+      "properties": {
+        "subnet": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), 'snet-novatrix-private')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "novatrix-queue",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts', parameters('sourceStorageName'))]",
+              "groupIds": [
+                "queue"
+              ]
+            }
+          }
+        ]
+      },
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-09-01",
+      "name": "pe-novatrix-6b-queue/default",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "queue",
+            "properties": {
+              "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.queue.core.windows.net')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateEndpoints', 'pe-novatrix-6b-queue')]",
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.queue.core.windows.net')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "condition": "[not(empty(parameters('deployerObjectId')))]",
+      "scope": "[concat('Microsoft.Storage/storageAccounts/', parameters('hostStorageName'), '/queueServices/default/queues/kundtjanst-notiser')]",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/queueServices/queues', parameters('hostStorageName'), 'default', 'kundtjanst-notiser'), parameters('deployerObjectId'), '19e7f393-937e-4f77-808e-94535e297925')]",
+      "properties": {
+        "principalId": "[parameters('deployerObjectId')]",
+        "principalType": "User",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '19e7f393-937e-4f77-808e-94535e297925')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/queueServices/queues', parameters('hostStorageName'), 'default', 'kundtjanst-notiser')]"
+      ]
+    }
+  ]
+}

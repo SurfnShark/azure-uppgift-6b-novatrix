@@ -1,0 +1,3 @@
+azure-functions>=1.21,<2
+azure-identity>=1.19,<2
+azure-storage-queue>=12.12,<13

@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Kontakta Novatrix AB:s kundtjänst.">
+  <title>Novatrix AB | Kundtjänst</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #5c667a;
+      --surface: #ffffff;
+      --accent: #3659e3;
+      --accent-dark: #2944b5;
+      --line: #dce1ea;
+      --background: #f2f5fb;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, #dce6ff 0, transparent 34rem),
+        var(--background);
+    }
+
+    main {
+      width: min(68rem, calc(100% - 2rem));
+      margin: 0 auto;
+      padding: 4rem 0;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: .75rem;
+      margin-bottom: 2rem;
+      font-weight: 800;
+      letter-spacing: .02em;
+    }
+
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 2.5rem;
+      height: 2.5rem;
+      border-radius: .8rem;
+      color: white;
+      background: var(--accent);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: .9fr 1.1fr;
+      gap: 2rem;
+      align-items: start;
+    }
+
+    h1 {
+      max-width: 12ch;
+      margin: 0 0 1rem;
+      font-size: clamp(2.5rem, 7vw, 5rem);
+      line-height: .98;
+      letter-spacing: -.05em;
+    }
+
+    .intro {
+      max-width: 34rem;
+      color: var(--muted);
+      font-size: 1.1rem;
+      line-height: 1.7;
+    }
+
+    .card {
+      padding: clamp(1.5rem, 4vw, 2.5rem);
+      border: 1px solid rgba(255, 255, 255, .8);
+      border-radius: 1.5rem;
+      background: rgba(255, 255, 255, .92);
+      box-shadow: 0 1.5rem 4rem rgba(41, 60, 105, .13);
+    }
+
+    h2 { margin: 0 0 .5rem; font-size: 1.65rem; }
+    .hint { margin: 0 0 1.5rem; color: var(--muted); }
+
+    label {
+      display: block;
+      margin: 1rem 0 .4rem;
+      font-weight: 700;
+    }
+
+    input,
+    textarea {
+      width: 100%;
+      padding: .9rem 1rem;
+      border: 1px solid var(--line);
+      border-radius: .75rem;
+      font: inherit;
+      color: var(--ink);
+      background: var(--surface);
+    }
+
+    input:focus,
+    textarea:focus {
+      outline: 3px solid rgba(54, 89, 227, .18);
+      border-color: var(--accent);
+    }
+
+    textarea { min-height: 9rem; resize: vertical; }
+
+    button {
+      width: 100%;
+      margin-top: 1.25rem;
+      padding: 1rem;
+      border: 0;
+      border-radius: .75rem;
+      color: white;
+      background: var(--accent);
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    button:hover { background: var(--accent-dark); }
+
+    .demo-note {
+      margin-top: 1rem;
+      color: var(--muted);
+      font-size: .9rem;
+      text-align: center;
+    }
+
+    @media (max-width: 48rem) {
+      main { padding: 2rem 0; }
+      .layout { grid-template-columns: 1fr; }
+      h1 { max-width: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><span class="mark">N</span> Novatrix AB</div>
+    <div class="layout">
+      <section aria-labelledby="page-title">
+        <h1 id="page-title">Hur kan vi hjälpa dig?</h1>
+        <p class="intro">Beskriv ditt ärende så återkommer vår kundtjänst. Ärendet sparas tillsammans med din eventuella bilaga. Detta är en labbmiljö: använd bara påhittade uppgifter.</p>
+      </section>
+
+      <section class="card" aria-labelledby="form-title">
+        <h2 id="form-title">Skapa ett ärende</h2>
+        <p class="hint">Namn, e-post och meddelande behövs. Bilaga är frivilligt.</p>
+        <form id="ticket-form">
+          <label for="name">Namn</label>
+          <input id="name" name="name" type="text" autocomplete="name" maxlength="100" required>
+
+          <label for="email">E-post</label>
+          <input id="email" name="email" type="email" autocomplete="email" maxlength="254" required>
+
+          <label for="message">Meddelande</label>
+          <textarea id="message" name="message" maxlength="4000" required></textarea>
+
+          <label for="attachment">Bilaga (frivilligt, högst 1 MB)</label>
+          <input id="attachment" name="attachment" type="file" accept=".txt,.pdf,.png,.jpg,.jpeg">
+          <button type="submit">Skicka ärende</button>
+          <p id="status" class="demo-note" role="status" hidden></p>
+        </form>
+      </section>
+    </div>
+  </main>
+<script>
+const form = document.getElementById('ticket-form');
+form.addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = form.querySelector('button');
+  const status = document.getElementById('status');
+  const file = document.getElementById('attachment').files[0];
+  status.hidden = false;
+  if (file && file.size > 1024 * 1024) { status.textContent = 'Bilagan får vara högst 1 MB.'; return; }
+  button.disabled = true;
+  status.textContent = 'Sparar ditt ärende...';
+  try {
+    const response = await fetch('/api/tickets', {method: 'POST', body: new FormData(form)});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Ärendet kunde inte sparas.');
+    status.textContent = result.message + ' Ärendenummer: ' + result.id;
+    form.reset();
+  } catch (error) { status.textContent = error.message || 'Anslutningen misslyckades. Försök igen.'; }
+  finally { button.disabled = false; }
+});
+</script>
+</body>
+</html>
