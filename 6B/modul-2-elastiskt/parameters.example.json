@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "sourceStorageName": { "value": "YOUR_EXISTING_STORAGE" },
+    "sshPublicKey": { "value": "YOUR_PUBLIC_SSH_KEY" },
+    "vmSize": { "value": "Standard_D2s_v6" }
+  }
+}

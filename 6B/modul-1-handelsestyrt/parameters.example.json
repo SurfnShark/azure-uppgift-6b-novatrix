@@ -4,6 +4,7 @@
   "parameters": {
     "sourceStorageName": { "value": "YOUR_EXISTING_STORAGE" },
     "hostStorageName": { "value": "YOUR_UNIQUE_HOST_STORAGE" },
-    "functionName": { "value": "YOUR_UNIQUE_FUNCTION_NAME" }
+    "functionName": { "value": "YOUR_UNIQUE_FUNCTION_NAME" },
+    "notificationEmail": { "value": "YOUR_OWN_EMAIL" }
   }
 }

@@ -22,6 +22,9 @@
     "deployerObjectId": {
       "type": "string",
       "defaultValue": ""
+    },
+    "notificationEmail": {
+      "type": "securestring"
     }
   },
   "resources": [
@@ -196,6 +199,22 @@
             {
               "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
               "value": "false"
+            },
+            {
+              "name": "AUDIT_CONTAINER_URL",
+              "value": "[concat('https://',parameters('hostStorageName'),'.blob.core.windows.net/notification-audit')]"
+            },
+            {
+              "name": "EMAIL_ENDPOINT",
+              "value": "[concat('https://',reference(resourceId('Microsoft.Communication/communicationServices','acs-novatrix-6b'),'2023-03-31').hostName)]"
+            },
+            {
+              "name": "EMAIL_SENDER",
+              "value": "[concat('DoNotReply@',reference(resourceId('Microsoft.Communication/emailServices/domains','email-novatrix-6b','AzureManagedDomain'),'2023-03-31').fromSenderDomain)]"
+            },
+            {
+              "name": "NOTIFICATION_EMAIL",
+              "value": "[parameters('notificationEmail')]"
             }
           ]
         }
@@ -213,7 +232,9 @@
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-6b')]",
         "[resourceId('Microsoft.Storage/storageAccounts', parameters('hostStorageName'))]",
         "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), 'snet-novatrix-functions-clean')]",
-        "[resourceId('Microsoft.Storage/storageAccounts/queueServices/queues', parameters('hostStorageName'), 'default', concat('azure-webjobs-blobtrigger-', take(toLower(parameters('functionName')), 32)))]"
+        "[resourceId('Microsoft.Storage/storageAccounts/queueServices/queues', parameters('hostStorageName'), 'default', concat('azure-webjobs-blobtrigger-', take(toLower(parameters('functionName')), 32)))]",
+        "[resourceId('Microsoft.Communication/communicationServices','acs-novatrix-6b')]",
+        "[resourceId('Microsoft.Communication/emailServices/domains','email-novatrix-6b','AzureManagedDomain')]"
       ]
     },
     {
@@ -235,10 +256,16 @@
         "AzureWebJobsFeatureFlags": "EnableWorkerIndexing",
         "WEBSITE_VNET_ROUTE_ALL": "0",
         "WEBSITES_ENABLE_APP_SERVICE_STORAGE": "true",
-        "SCM_DO_BUILD_DURING_DEPLOYMENT": "false"
+        "SCM_DO_BUILD_DURING_DEPLOYMENT": "false",
+        "AUDIT_CONTAINER_URL": "[concat('https://',parameters('hostStorageName'),'.blob.core.windows.net/notification-audit')]",
+        "EMAIL_ENDPOINT": "[concat('https://',reference(resourceId('Microsoft.Communication/communicationServices','acs-novatrix-6b'),'2023-03-31').hostName)]",
+        "EMAIL_SENDER": "[concat('DoNotReply@',reference(resourceId('Microsoft.Communication/emailServices/domains','email-novatrix-6b','AzureManagedDomain'),'2023-03-31').fromSenderDomain)]",
+        "NOTIFICATION_EMAIL": "[parameters('notificationEmail')]"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', parameters('functionName'))]"
+        "[resourceId('Microsoft.Web/sites', parameters('functionName'))]",
+        "[resourceId('Microsoft.Communication/communicationServices','acs-novatrix-6b')]",
+        "[resourceId('Microsoft.Communication/emailServices/domains','email-novatrix-6b','AzureManagedDomain')]"
       ]
     },
     {
@@ -453,6 +480,96 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts/queueServices/queues', parameters('hostStorageName'), 'default', 'kundtjanst-notiser')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Communication/emailServices",
+      "apiVersion": "2023-03-31",
+      "name": "email-novatrix-6b",
+      "location": "global",
+      "tags": {
+        "lab": "novatrix-vg",
+        "assignment": "6B"
+      },
+      "properties": {
+        "dataLocation": "Europe"
+      }
+    },
+    {
+      "type": "Microsoft.Communication/emailServices/domains",
+      "apiVersion": "2023-03-31",
+      "name": "email-novatrix-6b/AzureManagedDomain",
+      "location": "global",
+      "tags": {
+        "lab": "novatrix-vg",
+        "assignment": "6B"
+      },
+      "properties": {
+        "domainManagement": "AzureManaged",
+        "userEngagementTracking": "Disabled"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Communication/emailServices','email-novatrix-6b')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Communication/communicationServices",
+      "apiVersion": "2023-03-31",
+      "name": "acs-novatrix-6b",
+      "location": "global",
+      "tags": {
+        "lab": "novatrix-vg",
+        "assignment": "6B"
+      },
+      "properties": {
+        "dataLocation": "Europe",
+        "linkedDomains": [
+          "[resourceId('Microsoft.Communication/emailServices/domains','email-novatrix-6b','AzureManagedDomain')]"
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Communication/emailServices/domains','email-novatrix-6b','AzureManagedDomain')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-05-01",
+      "name": "[concat(parameters('hostStorageName'), '/default/notification-audit')]",
+      "properties": {
+        "publicAccess": "None"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', parameters('hostStorageName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.Communication/communicationServices','acs-novatrix-6b'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities','id-novatrix-6b'), 'b24988ac-6180-42a0-ab88-20f7382dd24c')]",
+      "scope": "Microsoft.Communication/communicationServices/acs-novatrix-6b",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions','b24988ac-6180-42a0-ab88-20f7382dd24c')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities','id-novatrix-6b'),'2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Communication/communicationServices','acs-novatrix-6b')]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities','id-novatrix-6b')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "condition": "[not(empty(parameters('deployerObjectId')))]",
+      "scope": "[concat('Microsoft.Storage/storageAccounts/',parameters('hostStorageName'),'/blobServices/default/containers/notification-audit')]",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers',parameters('hostStorageName'),'default','notification-audit'),parameters('deployerObjectId'),'2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')]",
+      "properties": {
+        "principalId": "[parameters('deployerObjectId')]",
+        "principalType": "User",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions','2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers',parameters('hostStorageName'),'default','notification-audit')]"
       ]
     }
   ]

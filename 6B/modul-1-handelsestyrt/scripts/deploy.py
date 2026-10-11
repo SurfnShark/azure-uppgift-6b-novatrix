@@ -38,7 +38,7 @@ if __name__ == '__main__':
         raise SystemExit('Värdlagring och befintlig ärendelagring måste vara olika.')
     if not options.events_only:
         if not options.code_only:
-            for provider in ['Microsoft.Web', 'Microsoft.EventGrid']:
+            for provider in ['Microsoft.Web', 'Microsoft.EventGrid', 'Microsoft.Communication']:
                 az('provider', 'register', '-n', provider, '--wait')
             deployer = az('ad', 'signed-in-user', 'show')['id']
             with tempfile.TemporaryDirectory() as folder:

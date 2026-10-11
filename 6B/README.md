@@ -1,99 +1,122 @@
-# 6B - Händelsestyrda ärenden
+# 6B: elastiskt, övervakat och händelsestyrt
 
-## Mål och lösning
+## Lösningen
 
-Modul 1 ersätter det direkta anropet till Power Automate med Azures egna tjänster:
+Alla tre modulerna finns i separata mappar. Azure-resurserna beskrivs i ARM och programmen finns som kopierbar kod.
 
 ```text
-Novatrix-formulär -> API -> privat Blob Storage: arenden/<id>/arende.json
-                                  |
-                                  v
-                              Event Grid
-                                  |
-                                  v
-                          Function NotifyOnTicket
-                                  |
-                                  v
-                    Storage Queue: kundtjanst-notiser
+Besökare -> publik lastbalanserare -> scale set med 1 eller 2 webbinstanser
+                                       |
+                                       v
+                               privat Blob Storage
+                                       |
+                                    Event Grid
+                                       |
+                               Function NotifyOnTicket
+                               /        |           \
+                            journal    könotis       mejl
+
+CPU-metrik -> autoskalning och CPU-larm -> action group -> mejl
+Azure Monitor Agent -> Log Analytics -> KQL
+Azure Policy -> kräver labbtagg på scale set
 ```
 
-Event Grid filtrerar nya blobar i `arenden` som slutar med `/arende.json`. Bilagor startar ingen separat ärendenotis. Blob-triggern använder Event Grid som källa och läser ärendet via privat nätverk. Funktionen kontrollerar ärendets id och uppgifter och skriver en JSON-notis med id och blobnamn till kön. Den skickar inte mejl eller Teams-meddelanden. Kön är en beständig notis för en framtida mottagare; en automatisk mottagare ingår inte i modulen.
+## Modul 1: ärendekedjan
 
-## Filer
+Event Grid reagerar bara på nya `arende.json` i containern `arenden`. Bilagor startar ingen egen ärendenotis. Funktionen läser och validerar ärendet med hanterad identitet, skriver en journal i `notification-audit`, lägger en notis i `kundtjanst-notiser` och skickar ett mejl via Azure Communication Services.
 
-| Fil | Användning |
+Event Grid gör att kedjan reagerar på en sparad fil utan att ett program behöver kontrollera lagringen hela tiden. Funktionen samlar valideringen och de tre åtgärderna i kod. Blob Storage sparar teknisk status, kön gör det möjligt att behandla notisen senare och Communication Services sköter mejlet utan en Microsoft 365-anslutning.
+
+En domän som Azure hanterar används som avsändare. Ingen egen domän eller lagringsnyckel behövs. Mottagaren anges i en privat parameterfil. Testärenden ska innehålla påhittade uppgifter. Journal, könotis, logg och mejl innehåller ärendenummer och teknisk status, inte kundens namn, adress eller ärendetext.
+
+Journalen sparar vilka åtgärder som bekräftats. En tillfällig bloblease begränsar samtidiga försök för samma ärende. Exakt en leverans garanteras ändå inte: om ett anrop lyckas men svaret eller journaluppdateringen försvinner kan en åtgärd upprepas. En framtida mottagare av kön behöver känna igen ticketId. Notiserna i kön sparas i högst ett dygn.
+
+## Modul 2: skalbar webb
+
+Webbinstanserna använder samma grundupplägg med cloud-init som tidigare Novatrix-VM: Nginx, Python-API och hanterad identitet. Webbvarianten sparar ärendet utan att anropa Power Automate. En Standard Load Balancer fördelar HTTP-trafiken. Proben använder `/api/health`, och en utgående regel ger instanserna tillgång till paket och Azure-tjänster.
+
+Hälsokontrollen har en egen Nginx-regel utan formulärets begränsning av antalet anrop. Det gör att lastbalanserarens återkommande kontroller inte blockeras av HTTP 429. Formulärets övriga API-anrop behåller trafikbegränsningen.
+
+Autoskalningen styrs av genomsnittlig CPU under fem minuter:
+
+| Regel | Åtgärd |
 | --- | --- |
-| `modul-1-handelsestyrt/infra/main.json` | ARM för Function, nätverk, identitet, roller och värdlagring. |
-| `modul-1-handelsestyrt/infra/events.json` | ARM för Event Grid och filtrerad prenumeration. |
-| `modul-1-handelsestyrt/function/` | Python-funktion, beroenden och värdinställningar. |
-| `modul-1-handelsestyrt/web/` | Formulär och API som sparar bloben utan direkt Power Automate-anrop. |
-| `modul-1-handelsestyrt/scripts/deploy.py` | Resurser via ARM och funktionskod via Azures ZIP-publicering. |
-| `modul-1-handelsestyrt/scripts/deploy-web.py` | Installerar webbvarianten via Run Command. |
-| `modul-1-handelsestyrt/scripts/cleanup.py` | Tar bort modulens resurser efter testerna. |
+| Över 70 procent | Lägg till en instans. |
+| Under 30 procent | Ta bort en instans. |
+| Minsta och största antal | 1 respektive 2. |
+| Väntetid efter en skalning | Fem minuter. |
 
-## Säkerhet och designval
+Gränserna skiljer sig åt för att undvika upprepad skalning upp och ner vid samma belastning. Högst två instanser begränsar kostnaden. B-storleken hade kapacitets- eller kvotbegränsningar i testmiljön; parameterexemplet använder därför D2s v6. Välj en mindre tillgänglig storlek om prenumerationen tillåter det. Tillgänglighet över flera zoner är inte verifierad i denna labb.
 
-- Hanterad identitet används för alla lagringsanrop. Ingen lagringsnyckel eller anslutningssträng ligger i koden. Delade lagringsnycklar är avstängda.
-- Befintlig ärendelagring behåller offentlig nätverksåtkomst avstängd. Funktionen ansluts till VNet och använder privata endpoints för blobar och triggerns felkö.
-- Värdlagringen är ett separat konto med autentiserad publik nätverksanslutning. Anonym åtkomst är avstängd. Där finns intern kördata och notiskön, inte kundens ärendefiler.
-- Blob-triggerns rekommenderade lagringsroller används. Blob Data Owner begränsas till containern arenden, Queue Data Contributor till ärendelagringen. Värdlagringens roller behövs för runtime och triggerns interna tillstånd.
-- Event Grid använder en skyddad webhook. ARM hämtar dess systemnyckel från Azure; den är inte hårdkodad eller ett alternativ till den hanterade lagringsidentiteten.
-- Event Grid kräver undantaget för betrodda Azure-tjänster på källkontot. Publiceringsskriptet aktiverar `AzureServices` för händelsekopplingen. Offentlig nätverksåtkomst och delade lagringsnycklar förblir avstängda. Anteckna tidigare undantag innan körning och återställ efter städningen.
-- Notisen och applikationsloggen innehåller bara ärendenummer och teknisk information, inte kundens text eller e-post.
-- Funktionen använder en liten Linux B1-plan med en instans under labben. Planen har timkostnad även när ingen händelse behandlas och tas därför bort efter testet. Flex Consumption provades först, men Azures interna nätverkskoppling gav ett autentiseringsfel. B1 använder App Service-nätverkskopplingen och bevarar samma privata ärendelagring.
+Belastningstestet använder två CPU-processer i en tillfällig systemd-tjänst med tidsgräns. Det följer kapaciteten och kontrollerar svar från båda instanserna via lastbalanseraren. Svarshuvudet `X-Novatrix-Instance` visar vilken instans som svarade.
+
+## Modul 3: övervakning och regler
+
+CPU-larmet reagerar när genomsnittlig CPU är över 80 procent under fem minuter. En action group skickar mejl till labbägaren. Adressen behöver verifieras hos Azure. När belastningen sjunker kan larmet återgå till normalt tillstånd.
+
+Azure Monitor Agent skickar livstecken och ett begränsat urval av allvarliga systemloggar till Log Analytics. KQL-frågan i `modul-3-overvakat/heartbeat.kql` visar antal livstecken och senaste kontakt per webbinstans. Insamlingen begränsas till en liten mängd loggar, och arbetsytan har en daglig datagräns.
+
+Azure Policy tillämpar den inbyggda regeln som kräver taggen `lab=novatrix-vg`. Tilldelningen begränsas till labbens scale set. En ändring utan taggen ska nekas. Regeln påverkar inte hela prenumerationens övriga resurser.
+
+En separat budget för Novatrix-resursgruppen varnar vid 25 och 50 kronor när kontots faktureringsvaluta är SEK. Budgeten stoppar inte resurser, och kostnadsdata kan visas med fördröjning. Den kan behållas efter labben eftersom den inte kör någon beräkning.
+
+## Säkerhet
+
+- Ärendelagringen behåller publik nätverksåtkomst avstängd. Privata endpoints och avgränsade HTTPS-regler används.
+- Funktionsappen och webbinstanserna använder hanterade identiteter. Lagringsnycklar är avstängda och anonym åtkomst tillåts inte.
+- Funktionens lagringsroller följer blobtriggerns krav. Ärendeblobarnas roll begränsas till containern `arenden`.
+- Contributor tilldelas endast på labbens Communication Services för mejlsändning. Rollen kan även administrera just den resursen och är därför bredare än enbart mejlsändning.
+- Event Grid använder en skyddad webhook. ARM hämtar systemnyckeln från Azure; ingen nyckel ligger i koden.
+- Undantaget `AzureServices` behövs på ärendelagringen för Event Grid. Återställ det tidigare värdet efter labben.
+- Ingen publik SSH-port öppnas. Administration och belastningstest använder Azure Run Command.
+- HTTP-formuläret saknar TLS och kundinloggning och används bara med påhittade uppgifter.
 
 ## Körning
 
-Azure CLI behöver vara inloggat med behörighet att driftsätta resurser och roller i Novatrix-resursgruppen. Befintlig miljö från tidigare uppgifter behövs. Kopiera parameters.example.json till en lokal privat parameterfil och fyll i egna namn. Värdlagringen måste vara separat från den befintliga ärendelagringen.
-
-Driftsättningen ger den inloggade användaren läsbehörighet på notiskön för verifieringen. Rollen begränsas till den nya kön och tas bort vid städningen. Koden och beroendena byggs för Python 3.11 på Linux och publiceras som ZIP; Python med pip behöver finnas lokalt.
+Azure CLI och Python med pip behövs. CLI ska vara inloggat i rätt Azure-prenumeration. Den befintliga Novatrix-miljön, nätverket, containern `arenden` och identiteten `id-novatrix-app` behövs. Kopiera parameterexemplen till privata filer och fyll i egna namn, offentlig SSH-nyckel och mottagaradress. Värdlagringen måste vara separat från ärendelagringen. DNS-zoner och modulens felkö ska inte delas med en annan lösning.
 
 ```text
-python 6B/modul-1-handelsestyrt/scripts/deploy.py --parameters /private/6b.parameters.local.json
+python 6B/modul-1-handelsestyrt/scripts/deploy.py --parameters /private/module1.local.json
+python 6B/modul-1-handelsestyrt/scripts/deploy.py --parameters /private/module1.local.json --events-only
+python 6B/modul-2-elastiskt/scripts/deploy.py --parameters /private/module2.local.json
+python 6B/modul-3-overvakat/scripts/deploy.py --parameters /private/module3.local.json
+az deployment group create --resource-group rg-novatrix --template-file 6B/modul-3-overvakat/infra/budget.json --parameters @/private/budget.local.json
+python 6B/modul-2-elastiskt/scripts/load-test.py --output /private/scale-test.local.json
 ```
 
-När funktionskoden är publicerad och NotifyOnTicket visas i Azure:
+Kopiera `modul-3-overvakat/budget.parameters.example.json` till den privata budgetfilen och fyll i mottagare och månadens första dag som startDate. Lägg budgeten innan belastningstestet. Om en tjänst nyss registrerats kan Azure behöva tid innan dess API fungerar; kontrollera registreringen och försök igen. Skicka därefter ett påhittat formulärärende genom lastbalanseraren och jämför samma ticketId i journalen, kön och mejlet.
+
+Samla bevis innan städningen. Återställ eventuell tillfälligt ändrad webbvariant på den tidigare VM:n innan dess privata lagringsanslutning tas bort.
 
 ```text
-python 6B/modul-1-handelsestyrt/scripts/deploy.py --parameters /private/6b.parameters.local.json --events-only
-python 6B/modul-1-handelsestyrt/scripts/deploy-web.py --resource-group rg-novatrix --storage-account YOUR_EXISTING_STORAGE --keep-running-for-test
+python 6B/cleanup-vg.py --parameters /private/module1.local.json
 ```
 
-Skicka ett påhittat ärende i formuläret och jämför ärendenumret med notisen i kön. Kontrollera även att bilagan inte orsakar en extra notis. Ta först vara på nödvändiga bevis. Återställ föregående webbvariant om du vill använda uppgift 6 igen, innan den privata lagringsanslutningen tas bort.
+Städningen tar bort labbens scale set, lastbalanserare, autoskalning, larm, policytilldelning, arbetsyta, privata anslutningar, funktionsapp, mejltjänster, värdlagring och tillfälliga roller. Befintlig VM och ärendelagring bevaras. VM:n frigörs. Källans bypass återställs till None, som gällde i denna miljö. Budgeten behålls.
 
-```text
-python 6B/modul-1-handelsestyrt/scripts/cleanup.py --parameters /private/6b.parameters.local.json --restore-source-bypass None
-```
+## Verifiering
 
-Städningen tar bort modulen, dess nätverksregel, värdlagringen och notiserna men bevarar befintlig VM och ärendelagring. Återställ det tidigare bypass-värdet; exemplet använder None som i denna labb. Den förutsätter att DNS-zonerna och källans felkö saknades före labben och inte delas med andra lösningar. Felkön markeras som modulens resurs och tas bara bort när markeringen finns.
+Alla tre modulerna är driftsatta och kontrollerade i Azure:
 
-## Begränsningar
+| Kontroll | Resultat |
+| --- | --- |
+| Händelsekedja | Samma ärendenummer i formulärsvaret, journalen, könotisen och det mottagna mejlet. |
+| Autoskalning | CPU-belastning gav automatisk skalning från en till två instanser och tillbaka till en. |
+| Lastbalanserare | HTTP 200 från båda instansernas hälsokontroll. |
+| CPU-larm | Larmet utlöste vid cirka 99,58 procent och återställdes när belastningen sjönk. |
+| Larmets mejlkoppling | Verifierad mottagaradress och kopplad action group. Ett separat test för metriklarm skickades genom Azure Monitor och mottagaren bekräftade att testmejlet kom fram. CPU-larmet och mejlleveransen verifierades i två separata tester. |
+| KQL | Livstecken från båda webbinstanserna i Log Analytics. |
+| Azure Policy | Ändring utan labbtaggen nekades med RequestDisallowedByPolicy; befintliga taggar bevarades. |
+| Städning | Inga debiterande 6B-testresurser kvar. Ursprunglig VM frigjord, ärendelagring privat och bypass återställd till None. |
 
-Event Grid och köer kan leverera fler än en gång. En framtida mottagare behöver undvika dubbla åtgärder genom ticketId; exakt en leverans garanteras inte här. Vid upprepade funktionsfel finns triggerns felkö för kontroll. Köns notiser har livslängd ett dygn. Historiska ärenden behandlas inte automatiskt när prenumerationen skapas.
+Ett tomt subnät från ett tidigare Flex-försök är fortfarande låst av en Azure-koppling. Det kör ingen beräkning och har ingen egen timkostnad. Budgeten behålls.
 
-HTTP-formuläret är en labb utan TLS och kundinloggning. Använd påhittade uppgifter. Formulärets lyckade svar bevisar sparandet, inte att den efterföljande notisen redan är klar. Kontrollera kön separat.
-
-Detta är modul 1. Alla tre moduler krävs för uppgiftens fulla VG-bredd.
-
-## Verifierade resultat
-
-- ARM-resurserna driftsattes och Event Grid-prenumerationen fick status Succeeded.
-- Azure hittade NotifyOnTicket med blob-trigger och Event Grid som källa.
-- Ett formulärärende med bilaga sparades och gav en notis med samma ticketId i kön. Bilagan gav ingen separat notis.
-- Ett andra ärende gav också rätt notis efter återgång till B1. B2 användes tillfälligt under felsökningen.
-- Den interna triggerkön skapas i ARM innan appen startar. HTTPS-regeln i det privata subnätet släpper bara in funktionssubnätets lagringsanrop.
-
-Bildbevis och detaljerade testresultat finns i den separata rapporten.
-
-Efter testerna återställdes webbvarianten från uppgift 6 och dess privata lagringsinställningar. VM:n är frigjord och modulens debiterande resurser är borttagna. Ett tomt subnät från Flex-försöket är fortfarande låst av Azures interna servicekoppling. Borttagning nekades; subnätet har ingen egen timkostnad.
-
-## Kostnad
-
-Beräkning debiteras efter användning och eventuella gratismängder. Privat endpoint har timkostnad, och lagring samt transaktioner kan kosta. Ta bort testresurserna efteråt. En budget varnar men stoppar inte kostnader. M365-provperioderna från uppgift 6 är separata och påverkas inte av denna modul.
+Bildbevisen redovisas i den separata PDF-rapporten. PDF, privata parameterfiler, råa bevis och arbetsanteckningar ingår inte i GitHub-underlaget.
 
 ## Källor
 
-- [Microsoft: Event Grid-baserad blob-trigger](https://learn.microsoft.com/en-us/azure/azure-functions/functions-event-grid-blob-trigger?pivots=programming-language-python)
-- [Microsoft: driftsättning som kod](https://learn.microsoft.com/en-us/azure/azure-functions/functions-infrastructure-as-code?tabs=linux)
-- [Microsoft: ZIP-publicering](https://learn.microsoft.com/en-us/azure/azure-functions/deployment-zip-push)
-- [Microsoft: App Service Linux-priser](https://azure.microsoft.com/en-us/pricing/details/app-service/linux/)
+- [Microsoft: Event Grid och blobtrigger](https://learn.microsoft.com/en-us/azure/azure-functions/functions-event-grid-blob-trigger?pivots=programming-language-python)
+- [Microsoft: skicka mejl via Azure Communication Services](https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/email/send-email)
+- [Microsoft: autoskalningens regler](https://learn.microsoft.com/en-us/azure/azure-monitor/autoscale/autoscale-understanding-settings)
+- [Microsoft: Azure Monitor Agent](https://learn.microsoft.com/en-us/azure/azure-monitor/agents/azure-monitor-agent-manage)
+- [Microsoft: Azure Policy](https://learn.microsoft.com/en-us/azure/governance/policy/overview)

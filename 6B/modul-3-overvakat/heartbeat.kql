@@ -1,0 +1,4 @@
+Heartbeat
+| where TimeGenerated > ago(30m)
+| summarize LastSeen=max(TimeGenerated), Heartbeats=count() by Computer
+| order by LastSeen desc

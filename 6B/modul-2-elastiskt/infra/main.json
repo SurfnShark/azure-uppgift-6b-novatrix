@@ -1,0 +1,363 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "swedencentral"
+    },
+    "sourceStorageName": {
+      "type": "string"
+    },
+    "sshPublicKey": {
+      "type": "string"
+    },
+    "vmSize": {
+      "type": "string",
+      "defaultValue": "Standard_D2s_v6"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2023-09-01",
+      "name": "nsg-novatrix-6b-vmss",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "Allow-HTTP",
+            "properties": {
+              "priority": 100,
+              "direction": "Inbound",
+              "access": "Allow",
+              "protocol": "Tcp",
+              "sourceAddressPrefix": "Internet",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "80"
+            }
+          },
+          {
+            "name": "Allow-LB-Probe",
+            "properties": {
+              "priority": 110,
+              "direction": "Inbound",
+              "access": "Allow",
+              "protocol": "Tcp",
+              "sourceAddressPrefix": "AzureLoadBalancer",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "80"
+            }
+          },
+          {
+            "name": "Deny-Other-Inbound",
+            "properties": {
+              "priority": 4096,
+              "direction": "Inbound",
+              "access": "Deny",
+              "protocol": "*",
+              "sourceAddressPrefix": "*",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "*"
+            }
+          }
+        ]
+      },
+      "location": "[parameters('location')]",
+      "tags": {
+        "lab": "novatrix-vg",
+        "assignment": "6B"
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "apiVersion": "2023-09-01",
+      "name": "vnet-novatrix/snet-novatrix-vmss",
+      "properties": {
+        "addressPrefix": "10.10.6.0/24",
+        "networkSecurityGroup": {
+          "id": "[resourceId('Microsoft.Network/networkSecurityGroups', 'nsg-novatrix-6b-vmss')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', 'nsg-novatrix-6b-vmss')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups/securityRules",
+      "apiVersion": "2023-09-01",
+      "name": "nsg-novatrix-private/Allow-6B-VMSS-Storage-TLS",
+      "properties": {
+        "priority": 120,
+        "direction": "Inbound",
+        "access": "Allow",
+        "protocol": "Tcp",
+        "sourceAddressPrefix": "10.10.6.0/24",
+        "sourcePortRange": "*",
+        "destinationAddressPrefix": "10.10.2.0/24",
+        "destinationPortRange": "443"
+      }
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2023-09-01",
+      "name": "pip-novatrix-6b-lb",
+      "properties": {
+        "publicIPAllocationMethod": "Static"
+      },
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "tags": {
+        "lab": "novatrix-vg",
+        "assignment": "6B"
+      }
+    },
+    {
+      "type": "Microsoft.Network/loadBalancers",
+      "apiVersion": "2023-09-01",
+      "name": "lb-novatrix-6b",
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "name": "public",
+            "properties": {
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', 'pip-novatrix-6b-lb')]"
+              }
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "name": "web"
+          }
+        ],
+        "probes": [
+          {
+            "name": "http",
+            "properties": {
+              "protocol": "Http",
+              "port": 80,
+              "requestPath": "/api/health",
+              "intervalInSeconds": 5,
+              "numberOfProbes": 2
+            }
+          }
+        ],
+        "loadBalancingRules": [
+          {
+            "name": "http",
+            "properties": {
+              "protocol": "Tcp",
+              "frontendPort": 80,
+              "backendPort": 80,
+              "frontendIPConfiguration": {
+                "id": "[concat(resourceId('Microsoft.Network/loadBalancers','lb-novatrix-6b'), '/frontendIPConfigurations/public')]"
+              },
+              "backendAddressPool": {
+                "id": "[concat(resourceId('Microsoft.Network/loadBalancers','lb-novatrix-6b'), '/backendAddressPools/web')]"
+              },
+              "probe": {
+                "id": "[concat(resourceId('Microsoft.Network/loadBalancers','lb-novatrix-6b'), '/probes/http')]"
+              },
+              "disableOutboundSnat": true,
+              "idleTimeoutInMinutes": 4
+            }
+          }
+        ],
+        "outboundRules": [
+          {
+            "name": "outbound",
+            "properties": {
+              "protocol": "All",
+              "allocatedOutboundPorts": 1024,
+              "backendAddressPool": {
+                "id": "[concat(resourceId('Microsoft.Network/loadBalancers','lb-novatrix-6b'), '/backendAddressPools/web')]"
+              },
+              "frontendIPConfigurations": [
+                {
+                  "id": "[concat(resourceId('Microsoft.Network/loadBalancers','lb-novatrix-6b'), '/frontendIPConfigurations/public')]"
+                }
+              ],
+              "idleTimeoutInMinutes": 4
+            }
+          }
+        ]
+      },
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "tags": {
+        "lab": "novatrix-vg",
+        "assignment": "6B"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', 'pip-novatrix-6b-lb')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachineScaleSets",
+      "apiVersion": "2024-03-01",
+      "name": "vmss-novatrix-web",
+      "properties": {
+        "overprovision": false,
+        "upgradePolicy": {
+          "mode": "Manual"
+        },
+        "singlePlacementGroup": true,
+        "virtualMachineProfile": {
+          "storageProfile": {
+            "imageReference": {
+              "publisher": "Canonical",
+              "offer": "0001-com-ubuntu-server-jammy",
+              "sku": "22_04-lts-gen2",
+              "version": "latest"
+            },
+            "osDisk": {
+              "createOption": "FromImage",
+              "caching": "ReadWrite",
+              "managedDisk": {
+                "storageAccountType": "Standard_LRS"
+              }
+            }
+          },
+          "osProfile": {
+            "computerNamePrefix": "novatrix",
+            "adminUsername": "azureuser",
+            "linuxConfiguration": {
+              "disablePasswordAuthentication": true,
+              "ssh": {
+                "publicKeys": [
+                  {
+                    "path": "/home/azureuser/.ssh/authorized_keys",
+                    "keyData": "[parameters('sshPublicKey')]"
+                  }
+                ]
+              }
+            },
+            "customData": "[base64(concat(variables('cloudInitStart'), parameters('sourceStorageName'), '\n      MANAGED_IDENTITY_CLIENT_ID=', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities','id-novatrix-app'),'2023-01-31').clientId, variables('cloudInitEnd')))]"
+          },
+          "networkProfile": {
+            "networkInterfaceConfigurations": [
+              {
+                "name": "nic",
+                "properties": {
+                  "primary": true,
+                  "ipConfigurations": [
+                    {
+                      "name": "ip",
+                      "properties": {
+                        "subnet": {
+                          "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets','vnet-novatrix','snet-novatrix-vmss')]"
+                        },
+                        "loadBalancerBackendAddressPools": [
+                          {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers','lb-novatrix-6b'), '/backendAddressPools/web')]"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      },
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('vmSize')]",
+        "tier": "Standard",
+        "capacity": 1
+      },
+      "tags": {
+        "lab": "novatrix-vg",
+        "assignment": "6B"
+      },
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-app')]": {}
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/loadBalancers', 'lb-novatrix-6b')]",
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets','vnet-novatrix','snet-novatrix-vmss')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/autoscalesettings",
+      "apiVersion": "2022-10-01",
+      "name": "autoscale-novatrix-6b",
+      "properties": {
+        "enabled": true,
+        "targetResourceUri": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', 'vmss-novatrix-web')]",
+        "profiles": [
+          {
+            "name": "CPU",
+            "capacity": {
+              "minimum": "1",
+              "maximum": "2",
+              "default": "1"
+            },
+            "rules": [
+              {
+                "metricTrigger": {
+                  "metricName": "Percentage CPU",
+                  "metricResourceUri": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', 'vmss-novatrix-web')]",
+                  "timeGrain": "PT1M",
+                  "statistic": "Average",
+                  "timeWindow": "PT5M",
+                  "timeAggregation": "Average",
+                  "operator": "GreaterThan",
+                  "threshold": 70
+                },
+                "scaleAction": {
+                  "direction": "Increase",
+                  "type": "ChangeCount",
+                  "value": "1",
+                  "cooldown": "PT5M"
+                }
+              },
+              {
+                "metricTrigger": {
+                  "metricName": "Percentage CPU",
+                  "metricResourceUri": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', 'vmss-novatrix-web')]",
+                  "timeGrain": "PT1M",
+                  "statistic": "Average",
+                  "timeWindow": "PT5M",
+                  "timeAggregation": "Average",
+                  "operator": "LessThan",
+                  "threshold": 30
+                },
+                "scaleAction": {
+                  "direction": "Decrease",
+                  "type": "ChangeCount",
+                  "value": "1",
+                  "cooldown": "PT5M"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "location": "[parameters('location')]",
+      "tags": {
+        "lab": "novatrix-vg",
+        "assignment": "6B"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachineScaleSets', 'vmss-novatrix-web')]"
+      ]
+    }
+  ],
+  "variables": {
+    "cloudInitStart": "#cloud-config\npackage_update: true\npackages:\n  - nginx\nwrite_files:\n  - path: /opt/novatrix-api/app.py\n    permissions: \"0644\"\n    encoding: b64\n    content: IiIiRW5rZWwgbGFiYnNlcnZlciBiYWtvbSBOZ2lueC4gS8O2cnMgZW5kYXN0IHDDpSBsb29wYmFjay4iIiINCmltcG9ydCBqc29uDQppbXBvcnQgbG9nZ2luZw0KaW1wb3J0IG1pbWV0eXBlcw0KaW1wb3J0IHJlDQppbXBvcnQgdXVpZA0KZnJvbSBlbWFpbCBpbXBvcnQgcG9saWN5DQpmcm9tIGVtYWlsLnBhcnNlciBpbXBvcnQgQnl0ZXNQYXJzZXINCmZyb20gaHR0cC5zZXJ2ZXIgaW1wb3J0IEJhc2VIVFRQUmVxdWVzdEhhbmRsZXIsIFRocmVhZGluZ0hUVFBTZXJ2ZXINCmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aA0KZnJvbSB1cmxsaWIuZXJyb3IgaW1wb3J0IEhUVFBFcnJvciwgVVJMRXJyb3INCmZyb20gc3RvcmFnZSBpbXBvcnQgc2F2ZV9ibG9iDQoNCk1BWF9CT0RZID0gMiAqIDEwMjQgKiAxMDI0DQpNQVhfRklMRSA9IDEwMjQgKiAxMDI0DQpBTExPV0VEID0geycudHh0JywgJy5wZGYnLCAnLnBuZycsICcuanBnJywgJy5qcGVnJ30NCg0KDQpjbGFzcyBIYW5kbGVyKEJhc2VIVFRQUmVxdWVzdEhhbmRsZXIpOg0KICAgIGRlZiByZXBseShzZWxmLCBzdGF0dXMsIHZhbHVlKToNCiAgICAgICAgYm9keSA9IGpzb24uZHVtcHModmFsdWUsIGVuc3VyZV9hc2NpaT1GYWxzZSkuZW5jb2RlKCd1dGYtOCcpDQogICAgICAgIHNlbGYuc2VuZF9yZXNwb25zZShzdGF0dXMpDQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0NvbnRlbnQtVHlwZScsICdhcHBsaWNhdGlvbi9qc29uOyBjaGFyc2V0PXV0Zi04JykNCiAgICAgICAgc2VsZi5zZW5kX2hlYWRlcignQ29udGVudC1MZW5ndGgnLCBzdHIobGVuKGJvZHkpKSkNCiAgICAgICAgc2VsZi5zZW5kX2hlYWRlcignQ2FjaGUtQ29udHJvbCcsICduby1zdG9yZScpDQogICAgICAgIHNlbGYuZW5kX2hlYWRlcnMoKQ0KICAgICAgICBzZWxmLndmaWxlLndyaXRlKGJvZHkpDQoNCiAgICBkZWYgZG9fR0VUKHNlbGYpOg0KICAgICAgICBpZiBzZWxmLnBhdGggPT0gJy9hcGkvaGVhbHRoJzoNCiAgICAgICAgICAgIHNlbGYucmVwbHkoMjAwLCB7J3N0YXR1cyc6ICdvayd9KQ0KICAgICAgICBlbHNlOg0KICAgICAgICAgICAgc2VsZi5yZXBseSg0MDQsIHsnZXJyb3InOiAnU2lkYW4gZmlubnMgaW50ZS4nfSkNCg0KICAgIGRlZiBkb19QT1NUKHNlbGYpOg0KICAgICAgICBpZiBzZWxmLnBhdGggIT0gJy9hcGkvdGlja2V0cyc6DQogICAgICAgICAgICByZXR1cm4gc2VsZi5yZXBseSg0MDQsIHsnZXJyb3InOiAnU2lkYW4gZmlubnMgaW50ZS4nfSkNCiAgICAgICAgdHJ5Og0KICAgICAgICAgICAgb3JpZ2luID0gc2VsZi5oZWFkZXJzLmdldCgnT3JpZ2luJykNCiAgICAgICAgICAgIGhvc3QgPSBzZWxmLmhlYWRlcnMuZ2V0KCdIb3N0JywgJycpDQogICAgICAgICAgICBpZiBvcmlnaW4gYW5kIG9yaWdpbiBub3QgaW4gKCdodHRwOi8vJyArIGhvc3QsICdodHRwczovLycgKyBob3N0KToNCiAgICAgICAgICAgICAgICByZXR1cm4gc2VsZi5yZXBseSg0MDMsIHsnZXJyb3InOiAnT3RpbGzDpXRlbiBhdnPDpG5kYXJlLid9KQ0KICAgICAgICAgICAgbGVuZ3RoID0gaW50KHNlbGYuaGVhZGVycy5nZXQoJ0NvbnRlbnQtTGVuZ3RoJywgJzAnKSkNCiAgICAgICAgICAgIGNvbnRlbnRfdHlwZSA9IHNlbGYuaGVhZGVycy5nZXQoJ0NvbnRlbnQtVHlwZScsICcnKQ0KICAgICAgICAgICAgaWYgbm90IDAgPCBsZW5ndGggPD0gTUFYX0JPRFk6DQogICAgICAgICAgICAgICAgcmV0dXJuIHNlbGYucmVwbHkoNDEzLCB7J2Vycm9yJzogJ0bDtnIgc3RvciBlbGxlciB0b20gYmVnw6RyYW4uJ30pDQogICAgICAgICAgICBpZiBub3QgY29udGVudF90eXBlLnN0YXJ0c3dpdGgoJ211bHRpcGFydC9mb3JtLWRhdGEnKToNCiAgICAgICAgICAgICAgICByZXR1cm4gc2VsZi5yZXBseSg0MDAsIHsnZXJyb3InOiAnRm9ybXVsw6RyZGF0YSBrcsOkdnMuJ30pDQogICAgICAgICAgICBpZiAnXHInIGluIGNvbnRlbnRfdHlwZSBvciAnXG4nIGluIGNvbnRlbnRfdHlwZSBvciBsZW4oY29udGVudF90eXBlKSA+IDMwMDoNCiAgICAgICAgICAgICAgICByZXR1cm4gc2VsZi5yZXBseSg0MDAsIHsnZXJyb3InOiAnRmVsYWt0aWd0IGZvcm11bMOkci4nfSkNCiAgICAgICAgICAgIGJvZHkgPSBzZWxmLnJmaWxlLnJlYWQobGVuZ3RoKQ0KICAgICAgICAgICAgaWYgbGVuKGJvZHkpICE9IGxlbmd0aDoNCiAgICAgICAgICAgICAgICByZXR1cm4gc2VsZi5yZXBseSg0MDAsIHsnZXJyb3InOiAnT2Z1bGxzdMOkbmRpZyBiZWfDpHJhbi4nfSkNCiAgICAgICAgICAgIG1lc3NhZ2UgPSBCeXRlc1BhcnNlcihwb2xpY3k9cG9saWN5LmRlZmF1bHQpLnBhcnNlYnl0ZXMoDQogICAgICAgICAgICAgICAgKCdDb250ZW50LVR5cGU6ICcgKyBjb250ZW50X3R5cGUgKyAnXHJcbk1JTUUtVmVyc2lvbjogMS4wXHJcblxyXG4nKS5lbmNvZGUoJ2FzY2lpJykgKyBib2R5KQ0KICAgICAgICAgICAgaWYgbm90IG1lc3NhZ2UuaXNfbXVsdGlwYXJ0KCk6DQogICAgICAgICAgICAgICAgcmV0dXJuIHNlbGYucmVwbHkoNDAwLCB7J2Vycm9yJzogJ0ZlbGFrdGlndCBmb3JtdWzDpHIuJ30pDQogICAgICAgICAgICBmaWVsZHMgPSB7fTsgYXR0YWNobWVudCA9IE5vbmUNCiAgICAgICAgICAgIGZvciBwYXJ0IGluIG1lc3NhZ2UuaXRlcl9wYXJ0cygpOg0KICAgICAgICAgICAgICAgIG5hbWUgPSBwYXJ0LmdldF9wYXJhbSgnbmFtZScsIGhlYWRlcj0nY29udGVudC1kaXNwb3NpdGlvbicpDQogICAgICAgICAgICAgICAgZmlsZW5hbWUgPSBwYXJ0LmdldF9maWxlbmFtZSgpDQogICAgICAgICAgICAgICAgZGF0YSA9IHBhcnQuZ2V0X3BheWxvYWQoZGVjb2RlPVRydWUpIG9yIGInJw0KICAgICAgICAgICAgICAgIGlmIGZpbGVuYW1lIGFuZCBuYW1lID09ICdhdHRhY2htZW50JzoNCiAgICAgICAgICAgICAgICAgICAgaWYgYXR0YWNobWVudCBpcyBub3QgTm9uZToNCiAgICAgICAgICAgICAgICAgICAgICAgIHJldHVybiBzZWxmLnJlcGx5KDQwMCwgeydlcnJvcic6ICdFbmRhc3QgZW4gYmlsYWdhIHRpbGzDpXRzLid9KQ0KICAgICAgICAgICAgICAgICAgICBleHRlbnNpb24gPSBQYXRoKGZpbGVuYW1lKS5zdWZmaXgubG93ZXIoKQ0KICAgICAgICAgICAgICAgICAgICBpZiBleHRlbnNpb24gbm90IGluIEFMTE9XRUQgb3IgbGVuKGRhdGEpID4gTUFYX0ZJTEU6DQogICAgICAgICAgICAgICAgICAgICAgICByZXR1cm4gc2VsZi5yZXBseSg0MDAsIHsnZXJyb3InOiAnQmlsYWdhbiBtw6VzdGUgdmFyYSB0eHQsIHBkZiwgcG5nIGVsbGVyIGpwZyBvY2ggaMO2Z3N0IDEgTUIuJ30pDQogICAgICAgICAgICAgICAgICAgIGF0dGFjaG1lbnQgPSAoZXh0ZW5zaW9uLCBkYXRhKQ0KICAgICAgICAgICAgICAgIGVsaWYgbmFtZSBpbiAoJ25hbWUnLCAnZW1haWwnLCAnbWVzc2FnZScpOg0KICAgICAgICAgICAgICAgICAgICBpZiBuYW1lIGluIGZpZWxkczoNCiAgICAgICAgICAgICAgICAgICAgICAgIHJldHVybiBzZWxmLnJlcGx5KDQwMCwgeydlcnJvcic6ICdEdWJibGEgZm9ybXVsw6RyZsOkbHQuJ30pDQogICAgICAgICAgICAgICAgICAgIGZpZWxkc1tuYW1lXSA9IGRhdGEuZGVjb2RlKCd1dGYtOCcpLnN0cmlwKCkNCiAgICAgICAgICAgIGlmIG5vdCBhbGwoZmllbGRzLmdldChrZXkpIGZvciBrZXkgaW4gKCduYW1lJywgJ2VtYWlsJywgJ21lc3NhZ2UnKSk6DQogICAgICAgICAgICAgICAgcmV0dXJuIHNlbGYucmVwbHkoNDAwLCB7J2Vycm9yJzogJ0Z5bGwgaSBuYW1uLCBlLXBvc3Qgb2NoIG1lZGRlbGFuZGUuJ30pDQogICAgICAgICAgICBpZiBsZW4oZmllbGRzWyduYW1lJ10pID4gMTAwIG9yIGxlbihmaWVsZHNbJ2VtYWlsJ10pID4gMjU0IG9yIGxlbihmaWVsZHNbJ21lc3NhZ2UnXSkgPiA0MDAwOg0KICAgICAgICAgICAgICAgIHJldHVybiBzZWxmLnJlcGx5KDQwMCwgeydlcnJvcic6ICdFdHQgZm9ybXVsw6RyZsOkbHQgw6RyIGbDtnIgbMOlbmd0Lid9KQ0KICAgICAgICAgICAgaWYgbm90IHJlLmZ1bGxtYXRjaChyJ1teXHNAXStAW15cc0BdK1wuW15cc0BdKycsIGZpZWxkc1snZW1haWwnXSk6DQogICAgICAgICAgICAgICAgcmV0dXJuIHNlbGYucmVwbHkoNDAwLCB7J2Vycm9yJzogJ0FuZ2UgZW4gZ2lsdGlnIGUtcG9zdGFkcmVzcy4nfSkNCiAgICAgICAgICAgIHRpY2tldCA9IHV1aWQudXVpZDQoKS5oZXgNCiAgICAgICAgICAgIHJlY29yZCA9IHsnaWQnOiB0aWNrZXQsICoqZmllbGRzLCAnYXR0YWNobWVudCc6IE5vbmV9DQogICAgICAgICAgICBpZiBhdHRhY2htZW50Og0KICAgICAgICAgICAgICAgIGV4dGVuc2lvbiwgZGF0YSA9IGF0dGFjaG1lbnQNCiAgICAgICAgICAgICAgICBibG9iX25hbWUgPSBmJ3t0aWNrZXR9L2JpbGFnYXtleHRlbnNpb259Jw0KICAgICAgICAgICAgICAgIHNhdmVfYmxvYihibG9iX25hbWUsIGRhdGEsIG1pbWV0eXBlcy5ndWVzc190eXBlKGJsb2JfbmFtZSlbMF0gb3IgJ2FwcGxpY2F0aW9uL29jdGV0LXN0cmVhbScpDQogICAgICAgICAgICAgICAgcmVjb3JkWydhdHRhY2htZW50J10gPSBibG9iX25hbWUNCiAgICAgICAgICAgIHNhdmVfYmxvYihmJ3t0aWNrZXR9L2FyZW5kZS5qc29uJywganNvbi5kdW1wcyhyZWNvcmQsIGVuc3VyZV9hc2NpaT1GYWxzZSkuZW5jb2RlKCd1dGYtOCcpLCAnYXBwbGljYXRpb24vanNvbjsgY2hhcnNldD11dGYtOCcpDQogICAgICAgICAgICBub3RpZmljYXRpb24gPSAnZXZlbnRfcGVuZGluZycNCiAgICAgICAgICAgIHRleHQgPSAnRGl0dCDDpHJlbmRlIG9jaCBldmVudHVlbGwgYmlsYWdhIGhhciBzcGFyYXRzLiBBenVyZSBiZWhhbmRsYXIgw6RyZW5kZW5vdGlzZW4uJw0KICAgICAgICAgICAgc2VsZi5yZXBseSgyMDEsIHsnaWQnOiB0aWNrZXQsICdub3RpZmljYXRpb24nOiBub3RpZmljYXRpb24sICdtZXNzYWdlJzogdGV4dH0pDQogICAgICAgIGV4Y2VwdCAoVmFsdWVFcnJvciwgVW5pY29kZUVycm9yKToNCiAgICAgICAgICAgIHNlbGYucmVwbHkoNDAwLCB7J2Vycm9yJzogJ0ZlbGFrdGlndCBmb3JtdWzDpHIuJ30pDQogICAgICAgIGV4Y2VwdCAoSFRUUEVycm9yLCBVUkxFcnJvciwgVGltZW91dEVycm9yLCBPU0Vycm9yLCBSdW50aW1lRXJyb3IpOg0KICAgICAgICAgICAgbG9nZ2luZy5leGNlcHRpb24oJ0xhZ3JpbmdlbiBrdW5kZSBpbnRlIGJla3LDpGZ0YSDDpHJlbmRldCcpDQogICAgICAgICAgICBzZWxmLnJlcGx5KDUwMywgeydlcnJvcic6ICfDhHJlbmRldCBrdW5kZSBpbnRlIHNwYXJhcy4gRsO2cnPDtmsgaWdlbiBzZW5hcmUuJ30pDQoNCiAgICBkZWYgbG9nX21lc3NhZ2Uoc2VsZiwgZm9ybWF0LCAqYXJncyk6DQogICAgICAgICMgRm9ybXVsw6RyaW5uZWjDpWxsLCBlLXBvc3Qgb2NoIHRva2VuIHNrcml2cyBhbGRyaWcgaSBIVFRQLWxvZ2dlbi4NCiAgICAgICAgbG9nZ2luZy5pbmZvKCclcycsIGZvcm1hdCAlIGFyZ3MpDQoNCg0KaWYgX19uYW1lX18gPT0gJ19fbWFpbl9fJzoNCiAgICBsb2dnaW5nLmJhc2ljQ29uZmlnKGxldmVsPWxvZ2dpbmcuSU5GTykNCiAgICBUaHJlYWRpbmdIVFRQU2VydmVyKCgnMTI3LjAuMC4xJywgODA4MCksIEhhbmRsZXIpLnNlcnZlX2ZvcmV2ZXIoKQ0K\n  - path: /opt/novatrix-api/storage.py\n    permissions: \"0644\"\n    encoding: b64\n    content: IiIiQmxvYiBTdG9yYWdlIHZpYSBoYW50ZXJhZCBpZGVudGl0ZXQuIEluZ2EgbGFncmluZ3NueWNrbGFyIGFudsOkbmRzLiIiIgppbXBvcnQganNvbgppbXBvcnQgb3MKZnJvbSBlbWFpbC51dGlscyBpbXBvcnQgZm9ybWF0ZGF0ZQppbXBvcnQgdXJsbGliLnBhcnNlCmltcG9ydCB1cmxsaWIucmVxdWVzdAoKQUNDT1VOVCA9IG9zLmVudmlyb25bJ1NUT1JBR0VfQUNDT1VOVCddCkNPTlRBSU5FUiA9IG9zLmVudmlyb24uZ2V0KCdTVE9SQUdFX0NPTlRBSU5FUicsICdhcmVuZGVuJykKQ0xJRU5UX0lEID0gb3MuZW52aXJvblsnTUFOQUdFRF9JREVOVElUWV9DTElFTlRfSUQnXQoKCmRlZiB0b2tlbihjbGllbnRfaWQ9Q0xJRU5UX0lEKToKICAgIHF1ZXJ5ID0gdXJsbGliLnBhcnNlLnVybGVuY29kZSh7CiAgICAgICAgJ2FwaS12ZXJzaW9uJzogJzIwMTgtMDItMDEnLAogICAgICAgICdyZXNvdXJjZSc6ICdodHRwczovL3N0b3JhZ2UuYXp1cmUuY29tLycsCiAgICAgICAgJ2NsaWVudF9pZCc6IGNsaWVudF9pZCwKICAgIH0pCiAgICByZXF1ZXN0ID0gdXJsbGliLnJlcXVlc3QuUmVxdWVzdCgKICAgICAgICAnaHR0cDovLzE2OS4yNTQuMTY5LjI1NC9tZXRhZGF0YS9pZGVudGl0eS9vYXV0aDIvdG9rZW4/JyArIHF1ZXJ5LAogICAgICAgIGhlYWRlcnM9eydNZXRhZGF0YSc6ICd0cnVlJ30sCiAgICApCiAgICAjIEFucm9wYSBJTURTIGRpcmVrdDsgc2tpY2thIGFsZHJpZyB0b2tlbmJlZ8OkcmFuIHRpbGwgZW4gSFRUUC1wcm94eS4KICAgIG9wZW5lciA9IHVybGxpYi5yZXF1ZXN0LmJ1aWxkX29wZW5lcih1cmxsaWIucmVxdWVzdC5Qcm94eUhhbmRsZXIoe30pKQogICAgd2l0aCBvcGVuZXIub3BlbihyZXF1ZXN0LCB0aW1lb3V0PTEwKSBhcyByZXNwb25zZToKICAgICAgICByZXR1cm4ganNvbi5sb2FkKHJlc3BvbnNlKVsnYWNjZXNzX3Rva2VuJ10KCgpkZWYgYmxvYl9yZXF1ZXN0KG1ldGhvZCwgbmFtZSwgZGF0YT1Ob25lLCBjb250ZW50X3R5cGU9J2FwcGxpY2F0aW9uL29jdGV0LXN0cmVhbScsCiAgICAgICAgICAgICAgICAgY2xpZW50X2lkPUNMSUVOVF9JRCwgY29udGFpbmVyPUNPTlRBSU5FUik6CiAgICBwYXRoID0gdXJsbGliLnBhcnNlLnF1b3RlKG5hbWUsIHNhZmU9Jy8nKQogICAgdXJsID0gZidodHRwczovL3tBQ0NPVU5UfS5ibG9iLmNvcmUud2luZG93cy5uZXQve2NvbnRhaW5lcn0ve3BhdGh9JwogICAgaGVhZGVycyA9IHsnQXV0aG9yaXphdGlvbic6ICdCZWFyZXIgJyArIHRva2VuKGNsaWVudF9pZCksCiAgICAgICAgICAgICAgICd4LW1zLXZlcnNpb24nOiAnMjAyMy0xMS0wMycsCiAgICAgICAgICAgICAgICd4LW1zLWRhdGUnOiBmb3JtYXRkYXRlKHVzZWdtdD1UcnVlKX0KICAgIGlmIG1ldGhvZCA9PSAnUFVUJzoKICAgICAgICBoZWFkZXJzLnVwZGF0ZSh7J3gtbXMtYmxvYi10eXBlJzogJ0Jsb2NrQmxvYicsCiAgICAgICAgICAgICAgICAgICAgICAgICdDb250ZW50LVR5cGUnOiBjb250ZW50X3R5cGUsCiAgICAgICAgICAgICAgICAgICAgICAgICdJZi1Ob25lLU1hdGNoJzogJyonfSkKICAgIHJlcXVlc3QgPSB1cmxsaWIucmVxdWVzdC5SZXF1ZXN0KHVybCwgZGF0YT1kYXRhLCBoZWFkZXJzPWhlYWRlcnMsIG1ldGhvZD1tZXRob2QpCiAgICAjIEhUVFBTLWNlcnRpZmlrYXRldCBrb250cm9sbGVyYXMgYXYgUHl0aG9ucyBub3JtYWxhIFRMUy1oYW50ZXJpbmcuCiAgICB3aXRoIHVybGxpYi5yZXF1ZXN0LnVybG9wZW4ocmVxdWVzdCwgdGltZW91dD0yMCkgYXMgcmVzcG9uc2U6CiAgICAgICAgcmV0dXJuIHJlc3BvbnNlLnN0YXR1cywgcmVzcG9uc2UucmVhZCgpCgoKZGVmIHNhdmVfYmxvYihuYW1lLCBkYXRhLCBjb250ZW50X3R5cGUpOgogICAgc3RhdHVzLCBfID0gYmxvYl9yZXF1ZXN0KCdQVVQnLCBuYW1lLCBkYXRhLCBjb250ZW50X3R5cGUpCiAgICBpZiBzdGF0dXMgIT0gMjAxOgogICAgICAgIHJhaXNlIFJ1bnRpbWVFcnJvcignTGFncmluZ2VuIGJla3LDpGZ0YWRlIGludGUgdXBwbGFkZG5pbmdlbi4nKQo=\n  - path: /var/www/html/index.html\n    permissions: \"0644\"\n    encoding: b64\n    content: PCFkb2N0eXBlIGh0bWw+CjxodG1sIGxhbmc9InN2Ij4KPGhlYWQ+CiAgPG1ldGEgY2hhcnNldD0idXRmLTgiPgogIDxtZXRhIG5hbWU9InZpZXdwb3J0IiBjb250ZW50PSJ3aWR0aD1kZXZpY2Utd2lkdGgsIGluaXRpYWwtc2NhbGU9MSI+CiAgPG1ldGEgbmFtZT0iZGVzY3JpcHRpb24iIGNvbnRlbnQ9IktvbnRha3RhIE5vdmF0cml4IEFCOnMga3VuZHRqw6Ruc3QuIj4KICA8dGl0bGU+Tm92YXRyaXggQUIgfCBLdW5kdGrDpG5zdDwvdGl0bGU+CiAgPHN0eWxlPgogICAgOnJvb3QgewogICAgICBjb2xvci1zY2hlbWU6IGxpZ2h0OwogICAgICAtLWluazogIzE3MjAzMzsKICAgICAgLS1tdXRlZDogIzVjNjY3YTsKICAgICAgLS1zdXJmYWNlOiAjZmZmZmZmOwogICAgICAtLWFjY2VudDogIzM2NTllMzsKICAgICAgLS1hY2NlbnQtZGFyazogIzI5NDRiNTsKICAgICAgLS1saW5lOiAjZGNlMWVhOwogICAgICAtLWJhY2tncm91bmQ6ICNmMmY1ZmI7CiAgICB9CgogICAgKiB7IGJveC1zaXppbmc6IGJvcmRlci1ib3g7IH0KCiAgICBib2R5IHsKICAgICAgbWFyZ2luOiAwOwogICAgICBtaW4taGVpZ2h0OiAxMDB2aDsKICAgICAgZm9udC1mYW1pbHk6IEludGVyLCBzeXN0ZW0tdWksIC1hcHBsZS1zeXN0ZW0sIEJsaW5rTWFjU3lzdGVtRm9udCwgIlNlZ29lIFVJIiwgc2Fucy1zZXJpZjsKICAgICAgY29sb3I6IHZhcigtLWluayk7CiAgICAgIGJhY2tncm91bmQ6CiAgICAgICAgcmFkaWFsLWdyYWRpZW50KGNpcmNsZSBhdCB0b3AgbGVmdCwgI2RjZTZmZiAwLCB0cmFuc3BhcmVudCAzNHJlbSksCiAgICAgICAgdmFyKC0tYmFja2dyb3VuZCk7CiAgICB9CgogICAgbWFpbiB7CiAgICAgIHdpZHRoOiBtaW4oNjhyZW0sIGNhbGMoMTAwJSAtIDJyZW0pKTsKICAgICAgbWFyZ2luOiAwIGF1dG87CiAgICAgIHBhZGRpbmc6IDRyZW0gMDsKICAgIH0KCiAgICAuYnJhbmQgewogICAgICBkaXNwbGF5OiBpbmxpbmUtZmxleDsKICAgICAgYWxpZ24taXRlbXM6IGNlbnRlcjsKICAgICAgZ2FwOiAuNzVyZW07CiAgICAgIG1hcmdpbi1ib3R0b206IDJyZW07CiAgICAgIGZvbnQtd2VpZ2h0OiA4MDA7CiAgICAgIGxldHRlci1zcGFjaW5nOiAuMDJlbTsKICAgIH0KCiAgICAubWFyayB7CiAgICAgIGRpc3BsYXk6IGdyaWQ7CiAgICAgIHBsYWNlLWl0ZW1zOiBjZW50ZXI7CiAgICAgIHdpZHRoOiAyLjVyZW07CiAgICAgIGhlaWdodDogMi41cmVtOwogICAgICBib3JkZXItcmFkaXVzOiAuOHJlbTsKICAgICAgY29sb3I6IHdoaXRlOwogICAgICBiYWNrZ3JvdW5kOiB2YXIoLS1hY2NlbnQpOwogICAgfQoKICAgIC5sYXlvdXQgewogICAgICBkaXNwbGF5OiBncmlkOwogICAgICBncmlkLXRlbXBsYXRlLWNvbHVtbnM6IC45ZnIgMS4xZnI7CiAgICAgIGdhcDogMnJlbTsKICAgICAgYWxpZ24taXRlbXM6IHN0YXJ0OwogICAgfQoKICAgIGgxIHsKICAgICAgbWF4LXdpZHRoOiAxMmNoOwogICAgICBtYXJnaW46IDAgMCAxcmVtOwogICAgICBmb250LXNpemU6IGNsYW1wKDIuNXJlbSwgN3Z3LCA1cmVtKTsKICAgICAgbGluZS1oZWlnaHQ6IC45ODsKICAgICAgbGV0dGVyLXNwYWNpbmc6IC0uMDVlbTsKICAgIH0KCiAgICAuaW50cm8gewogICAgICBtYXgtd2lkdGg6IDM0cmVtOwogICAgICBjb2xvcjogdmFyKC0tbXV0ZWQpOwogICAgICBmb250LXNpemU6IDEuMXJlbTsKICAgICAgbGluZS1oZWlnaHQ6IDEuNzsKICAgIH0KCiAgICAuY2FyZCB7CiAgICAgIHBhZGRpbmc6IGNsYW1wKDEuNXJlbSwgNHZ3LCAyLjVyZW0pOwogICAgICBib3JkZXI6IDFweCBzb2xpZCByZ2JhKDI1NSwgMjU1LCAyNTUsIC44KTsKICAgICAgYm9yZGVyLXJhZGl1czogMS41cmVtOwogICAgICBiYWNrZ3JvdW5kOiByZ2JhKDI1NSwgMjU1LCAyNTUsIC45Mik7CiAgICAgIGJveC1zaGFkb3c6IDAgMS41cmVtIDRyZW0gcmdiYSg0MSwgNjAsIDEwNSwgLjEzKTsKICAgIH0KCiAgICBoMiB7IG1hcmdpbjogMCAwIC41cmVtOyBmb250LXNpemU6IDEuNjVyZW07IH0KICAgIC5oaW50IHsgbWFyZ2luOiAwIDAgMS41cmVtOyBjb2xvcjogdmFyKC0tbXV0ZWQpOyB9CgogICAgbGFiZWwgewogICAgICBkaXNwbGF5OiBibG9jazsKICAgICAgbWFyZ2luOiAxcmVtIDAgLjRyZW07CiAgICAgIGZvbnQtd2VpZ2h0OiA3MDA7CiAgICB9CgogICAgaW5wdXQsCiAgICB0ZXh0YXJlYSB7CiAgICAgIHdpZHRoOiAxMDAlOwogICAgICBwYWRkaW5nOiAuOXJlbSAxcmVtOwogICAgICBib3JkZXI6IDFweCBzb2xpZCB2YXIoLS1saW5lKTsKICAgICAgYm9yZGVyLXJhZGl1czogLjc1cmVtOwogICAgICBmb250OiBpbmhlcml0OwogICAgICBjb2xvcjogdmFyKC0taW5rKTsKICAgICAgYmFja2dyb3VuZDogdmFyKC0tc3VyZmFjZSk7CiAgICB9CgogICAgaW5wdXQ6Zm9jdXMsCiAgICB0ZXh0YXJlYTpmb2N1cyB7CiAgICAgIG91dGxpbmU6IDNweCBzb2xpZCByZ2JhKDU0LCA4OSwgMjI3LCAuMTgpOwogICAgICBib3JkZXItY29sb3I6IHZhcigtLWFjY2VudCk7CiAgICB9CgogICAgdGV4dGFyZWEgeyBtaW4taGVpZ2h0OiA5cmVtOyByZXNpemU6IHZlcnRpY2FsOyB9CgogICAgYnV0dG9uIHsKICAgICAgd2lkdGg6IDEwMCU7CiAgICAgIG1hcmdpbi10b3A6IDEuMjVyZW07CiAgICAgIHBhZGRpbmc6IDFyZW07CiAgICAgIGJvcmRlcjogMDsKICAgICAgYm9yZGVyLXJhZGl1czogLjc1cmVtOwogICAgICBjb2xvcjogd2hpdGU7CiAgICAgIGJhY2tncm91bmQ6IHZhcigtLWFjY2VudCk7CiAgICAgIGZvbnQ6IGluaGVyaXQ7CiAgICAgIGZvbnQtd2VpZ2h0OiA4MDA7CiAgICAgIGN1cnNvcjogcG9pbnRlcjsKICAgIH0KCiAgICBidXR0b246aG92ZXIgeyBiYWNrZ3JvdW5kOiB2YXIoLS1hY2NlbnQtZGFyayk7IH0KCiAgICAuZGVtby1ub3RlIHsKICAgICAgbWFyZ2luLXRvcDogMXJlbTsKICAgICAgY29sb3I6IHZhcigtLW11dGVkKTsKICAgICAgZm9udC1zaXplOiAuOXJlbTsKICAgICAgdGV4dC1hbGlnbjogY2VudGVyOwogICAgfQoKICAgIEBtZWRpYSAobWF4LXdpZHRoOiA0OHJlbSkgewogICAgICBtYWluIHsgcGFkZGluZzogMnJlbSAwOyB9CiAgICAgIC5sYXlvdXQgeyBncmlkLXRlbXBsYXRlLWNvbHVtbnM6IDFmcjsgfQogICAgICBoMSB7IG1heC13aWR0aDogbm9uZTsgfQogICAgfQogIDwvc3R5bGU+CjwvaGVhZD4KPGJvZHk+CiAgPG1haW4+CiAgICA8ZGl2IGNsYXNzPSJicmFuZCI+PHNwYW4gY2xhc3M9Im1hcmsiPk48L3NwYW4+IE5vdmF0cml4IEFCPC9kaXY+CiAgICA8ZGl2IGNsYXNzPSJsYXlvdXQiPgogICAgICA8c2VjdGlvbiBhcmlhLWxhYmVsbGVkYnk9InBhZ2UtdGl0bGUiPgogICAgICAgIDxoMSBpZD0icGFnZS10aXRsZSI+SHVyIGthbiB2aSBoasOkbHBhIGRpZz88L2gxPgogICAgICAgIDxwIGNsYXNzPSJpbnRybyI+QmVza3JpdiBkaXR0IMOkcmVuZGUgc8OlIMOldGVya29tbWVyIHbDpXIga3VuZHRqw6Ruc3QuIMOEcmVuZGV0IHNwYXJhcyB0aWxsc2FtbWFucyBtZWQgZGluIGV2ZW50dWVsbGEgYmlsYWdhLiBEZXR0YSDDpHIgZW4gbGFiYm1pbGrDtjogYW52w6RuZCBiYXJhIHDDpWhpdHRhZGUgdXBwZ2lmdGVyLjwvcD4KICAgICAgPC9zZWN0aW9uPgoKICAgICAgPHNlY3Rpb24gY2xhc3M9ImNhcmQiIGFyaWEtbGFiZWxsZWRieT0iZm9ybS10aXRsZSI+CiAgICAgICAgPGgyIGlkPSJmb3JtLXRpdGxlIj5Ta2FwYSBldHQgw6RyZW5kZTwvaDI+CiAgICAgICAgPHAgY2xhc3M9ImhpbnQiPk5hbW4sIGUtcG9zdCBvY2ggbWVkZGVsYW5kZSBiZWjDtnZzLiBCaWxhZ2Egw6RyIGZyaXZpbGxpZ3QuPC9wPgogICAgICAgIDxmb3JtIGlkPSJ0aWNrZXQtZm9ybSI+CiAgICAgICAgICA8bGFiZWwgZm9yPSJuYW1lIj5OYW1uPC9sYWJlbD4KICAgICAgICAgIDxpbnB1dCBpZD0ibmFtZSIgbmFtZT0ibmFtZSIgdHlwZT0idGV4dCIgYXV0b2NvbXBsZXRlPSJuYW1lIiBtYXhsZW5ndGg9IjEwMCIgcmVxdWlyZWQ+CgogICAgICAgICAgPGxhYmVsIGZvcj0iZW1haWwiPkUtcG9zdDwvbGFiZWw+CiAgICAgICAgICA8aW5wdXQgaWQ9ImVtYWlsIiBuYW1lPSJlbWFpbCIgdHlwZT0iZW1haWwiIGF1dG9jb21wbGV0ZT0iZW1haWwiIG1heGxlbmd0aD0iMjU0IiByZXF1aXJlZD4KCiAgICAgICAgICA8bGFiZWwgZm9yPSJtZXNzYWdlIj5NZWRkZWxhbmRlPC9sYWJlbD4KICAgICAgICAgIDx0ZXh0YXJlYSBpZD0ibWVzc2FnZSIgbmFtZT0ibWVzc2FnZSIgbWF4bGVuZ3RoPSI0MDAwIiByZXF1aXJlZD48L3RleHRhcmVhPgoKICAgICAgICAgIDxsYWJlbCBmb3I9ImF0dGFjaG1lbnQiPkJpbGFnYSAoZnJpdmlsbGlndCwgaMO2Z3N0IDEgTUIpPC9sYWJlbD4KICAgICAgICAgIDxpbnB1dCBpZD0iYXR0YWNobWVudCIgbmFtZT0iYXR0YWNobWVudCIgdHlwZT0iZmlsZSIgYWNjZXB0PSIudHh0LC5wZGYsLnBuZywuanBnLC5qcGVnIj4KICAgICAgICAgIDxidXR0b24gdHlwZT0ic3VibWl0Ij5Ta2lja2Egw6RyZW5kZTwvYnV0dG9uPgogICAgICAgICAgPHAgaWQ9InN0YXR1cyIgY2xhc3M9ImRlbW8tbm90ZSIgcm9sZT0ic3RhdHVzIiBoaWRkZW4+PC9wPgogICAgICAgIDwvZm9ybT4KICAgICAgPC9zZWN0aW9uPgogICAgPC9kaXY+CiAgPC9tYWluPgo8c2NyaXB0Pgpjb25zdCBmb3JtID0gZG9jdW1lbnQuZ2V0RWxlbWVudEJ5SWQoJ3RpY2tldC1mb3JtJyk7CmZvcm0uYWRkRXZlbnRMaXN0ZW5lcignc3VibWl0JywgYXN5bmMgZXZlbnQgPT4gewogIGV2ZW50LnByZXZlbnREZWZhdWx0KCk7CiAgY29uc3QgYnV0dG9uID0gZm9ybS5xdWVyeVNlbGVjdG9yKCdidXR0b24nKTsKICBjb25zdCBzdGF0dXMgPSBkb2N1bWVudC5nZXRFbGVtZW50QnlJZCgnc3RhdHVzJyk7CiAgY29uc3QgZmlsZSA9IGRvY3VtZW50LmdldEVsZW1lbnRCeUlkKCdhdHRhY2htZW50JykuZmlsZXNbMF07CiAgc3RhdHVzLmhpZGRlbiA9IGZhbHNlOwogIGlmIChmaWxlICYmIGZpbGUuc2l6ZSA+IDEwMjQgKiAxMDI0KSB7IHN0YXR1cy50ZXh0Q29udGVudCA9ICdCaWxhZ2FuIGbDpXIgdmFyYSBow7Znc3QgMSBNQi4nOyByZXR1cm47IH0KICBidXR0b24uZGlzYWJsZWQgPSB0cnVlOwogIHN0YXR1cy50ZXh0Q29udGVudCA9ICdTcGFyYXIgZGl0dCDDpHJlbmRlLi4uJzsKICB0cnkgewogICAgY29uc3QgcmVzcG9uc2UgPSBhd2FpdCBmZXRjaCgnL2FwaS90aWNrZXRzJywge21ldGhvZDogJ1BPU1QnLCBib2R5OiBuZXcgRm9ybURhdGEoZm9ybSl9KTsKICAgIGNvbnN0IHJlc3VsdCA9IGF3YWl0IHJlc3BvbnNlLmpzb24oKTsKICAgIGlmICghcmVzcG9uc2Uub2spIHRocm93IG5ldyBFcnJvcihyZXN1bHQuZXJyb3IgfHwgJ8OEcmVuZGV0IGt1bmRlIGludGUgc3BhcmFzLicpOwogICAgc3RhdHVzLnRleHRDb250ZW50ID0gcmVzdWx0Lm1lc3NhZ2UgKyAnIMOEcmVuZGVudW1tZXI6ICcgKyByZXN1bHQuaWQ7CiAgICBmb3JtLnJlc2V0KCk7CiAgfSBjYXRjaCAoZXJyb3IpIHsgc3RhdHVzLnRleHRDb250ZW50ID0gZXJyb3IubWVzc2FnZSB8fCAnQW5zbHV0bmluZ2VuIG1pc3NseWNrYWRlcy4gRsO2cnPDtmsgaWdlbi4nOyB9CiAgZmluYWxseSB7IGJ1dHRvbi5kaXNhYmxlZCA9IGZhbHNlOyB9Cn0pOwo8L3NjcmlwdD4KPC9ib2R5Pgo8L2h0bWw+Cg==\n  - path: /etc/nginx/sites-available/default\n    permissions: \"0644\"\n    encoding: b64\n    content: bGltaXRfcmVxX3pvbmUgJGJpbmFyeV9yZW1vdGVfYWRkciB6b25lPW5vdmF0cml4X3RpY2tldHM6MW0gcmF0ZT02ci9tOw0Kc2VydmVyIHsNCiAgICBsaXN0ZW4gODAgZGVmYXVsdF9zZXJ2ZXI7DQogICAgc2VydmVyX25hbWUgXzsNCiAgICByb290IC92YXIvd3d3L2h0bWw7DQogICAgaW5kZXggaW5kZXguaHRtbDsNCiAgICBhZGRfaGVhZGVyIFgtTm92YXRyaXgtSW5zdGFuY2UgJGhvc3RuYW1lIGFsd2F5czsNCiAgICBjbGllbnRfbWF4X2JvZHlfc2l6ZSAybTsNCiAgICBhZGRfaGVhZGVyIFgtQ29udGVudC1UeXBlLU9wdGlvbnMgbm9zbmlmZiBhbHdheXM7DQogICAgbG9jYXRpb24gLyB7IHRyeV9maWxlcyAkdXJpICR1cmkvID00MDQ7IH0NCiAgICBsb2NhdGlvbiA9IC9hcGkvaGVhbHRoIHsNCiAgICAgICAgcHJveHlfcGFzcyBodHRwOi8vMTI3LjAuMC4xOjgwODA7DQogICAgICAgIHByb3h5X3NldF9oZWFkZXIgSG9zdCAkaHR0cF9ob3N0Ow0KICAgICAgICBwcm94eV9jb25uZWN0X3RpbWVvdXQgNXM7DQogICAgICAgIHByb3h5X3JlYWRfdGltZW91dCAxMHM7DQogICAgfQ0KICAgIGxvY2F0aW9uIC9hcGkvIHsNCiAgICAgICAgbGltaXRfcmVxIHpvbmU9bm92YXRyaXhfdGlja2V0cyBidXJzdD0zIG5vZGVsYXk7DQogICAgICAgIGxpbWl0X3JlcV9zdGF0dXMgNDI5Ow0KICAgICAgICBwcm94eV9wYXNzIGh0dHA6Ly8xMjcuMC4wLjE6ODA4MDsNCiAgICAgICAgcHJveHlfc2V0X2hlYWRlciBIb3N0ICRodHRwX2hvc3Q7DQogICAgICAgIHByb3h5X2Nvbm5lY3RfdGltZW91dCA1czsNCiAgICAgICAgcHJveHlfcmVhZF90aW1lb3V0IDYwczsNCiAgICAgICAgcHJveHlfc2VuZF90aW1lb3V0IDYwczsNCiAgICB9DQp9DQo=\n  - path: /etc/systemd/system/novatrix-api.service\n    permissions: \"0644\"\n    encoding: b64\n    content: W1VuaXRdCkRlc2NyaXB0aW9uPU5vdmF0cml4IHRpY2tldCBBUEkKQWZ0ZXI9bmV0d29yay1vbmxpbmUudGFyZ2V0CldhbnRzPW5ldHdvcmstb25saW5lLnRhcmdldAoKW1NlcnZpY2VdClVzZXI9d3d3LWRhdGEKR3JvdXA9d3d3LWRhdGEKV29ya2luZ0RpcmVjdG9yeT0vb3B0L25vdmF0cml4LWFwaQpFbnZpcm9ubWVudEZpbGU9L2V0Yy9ub3ZhdHJpeC1hcGkuZW52CkV4ZWNTdGFydD0vdXNyL2Jpbi9weXRob24zIC9vcHQvbm92YXRyaXgtYXBpL2FwcC5weQpSZXN0YXJ0PW9uLWZhaWx1cmUKTm9OZXdQcml2aWxlZ2VzPXRydWUKUHJpdmF0ZVRtcD10cnVlClN0YXRlRGlyZWN0b3J5PW5vdmF0cml4LWFwaQpTdGF0ZURpcmVjdG9yeU1vZGU9MDcwMApQcm90ZWN0U3lzdGVtPXN0cmljdApQcm90ZWN0SG9tZT10cnVlClJlc3RyaWN0QWRkcmVzc0ZhbWlsaWVzPUFGX0lORVQgQUZfSU5FVDYKCltJbnN0YWxsXQpXYW50ZWRCeT1tdWx0aS11c2VyLnRhcmdldAo=\n  - path: /etc/novatrix-api.env\n    permissions: \"0640\"\n    content: |\n      STORAGE_CONTAINER=arenden\n      STORAGE_ACCOUNT=",
+    "cloudInitEnd": "\nruncmd:\n  - chown root:www-data /etc/novatrix-api.env\n  - systemctl daemon-reload\n  - systemctl enable --now novatrix-api\n  - systemctl restart nginx\n"
+  }
+}

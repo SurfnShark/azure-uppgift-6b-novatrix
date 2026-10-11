@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "notificationEmail": { "value": "YOUR_OWN_EMAIL" },
+    "startDate": { "value": "YYYY-MM-01" },
+    "amount": { "value": 50 }
+  }
+}

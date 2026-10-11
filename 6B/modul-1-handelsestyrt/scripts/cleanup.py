@@ -66,6 +66,15 @@ if __name__ == '__main__':
         for assignment in assignments:
             az('role', 'assignment', 'delete', '--ids', assignment['id'])
         az('identity', 'delete', '-g', group, '-n', 'id-novatrix-6b')
+    for name, kind in [('acs-novatrix-6b', 'Microsoft.Communication/communicationServices'),
+                       ('email-novatrix-6b', 'Microsoft.Communication/emailServices')]:
+        if exists(name, kind):
+            target = next(item['id'] for item in resources if item['name'] == name and item['type'].casefold() == kind.casefold())
+            if kind == 'Microsoft.Communication/emailServices':
+                domains = az('rest', '--method', 'get', '--url', target + '/domains?api-version=2023-03-31')['value']
+                for domain in domains:
+                    az('resource', 'delete', '--ids', domain['id'], '--api-version', '2023-03-31')
+            az('resource', 'delete', '--ids', target)
     if exists(host, 'Microsoft.Storage/storageAccounts'):
         account = az('storage', 'account', 'show', '-g', group, '-n', host)
         deployer = az('ad', 'signed-in-user', 'show')['id']
@@ -74,6 +83,7 @@ if __name__ == '__main__':
                     and assignment['scope'].casefold().startswith(account['id'].casefold() + '/')
                     and assignment['roleDefinitionId'].split('/')[-1] in [
                         '19e7f393-937e-4f77-808e-94535e297925',
+                        '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1',
                         'ba92f5b4-2d11-453d-a403-e96b0029c9fe']):
                 az('role', 'assignment', 'delete', '--ids', assignment['id'])
         az('storage', 'account', 'delete', '-g', group, '-n', host, '--yes')

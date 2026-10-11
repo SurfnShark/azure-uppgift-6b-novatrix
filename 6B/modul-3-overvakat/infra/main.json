@@ -1,0 +1,204 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "swedencentral"
+    },
+    "notificationEmail": {
+      "type": "string"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "law-novatrix-6b",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30,
+        "workspaceCapping": {
+          "dailyQuotaGb": 0.1
+        }
+      },
+      "location": "[parameters('location')]",
+      "tags": {
+        "lab": "novatrix-vg",
+        "assignment": "6B"
+      }
+    },
+    {
+      "type": "Microsoft.Insights/actionGroups",
+      "apiVersion": "2023-01-01",
+      "name": "ag-novatrix-6b",
+      "properties": {
+        "groupShortName": "Novatrix6B",
+        "enabled": true,
+        "emailReceivers": [
+          {
+            "name": "LabOwner",
+            "emailAddress": "[parameters('notificationEmail')]",
+            "useCommonAlertSchema": true
+          }
+        ]
+      },
+      "location": "global",
+      "tags": {
+        "lab": "novatrix-vg",
+        "assignment": "6B"
+      }
+    },
+    {
+      "type": "Microsoft.Insights/metricAlerts",
+      "apiVersion": "2018-03-01",
+      "name": "alert-novatrix-6b-cpu",
+      "properties": {
+        "description": "CPU \u00f6ver 80 procent i minst fem minuter.",
+        "severity": 2,
+        "enabled": true,
+        "scopes": [
+          "[resourceId('Microsoft.Compute/virtualMachineScaleSets', 'vmss-novatrix-web')]"
+        ],
+        "evaluationFrequency": "PT1M",
+        "windowSize": "PT5M",
+        "autoMitigate": true,
+        "targetResourceType": "Microsoft.Compute/virtualMachineScaleSets",
+        "targetResourceRegion": "[parameters('location')]",
+        "criteria": {
+          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+          "allOf": [
+            {
+              "name": "HighCPU",
+              "metricName": "Percentage CPU",
+              "metricNamespace": "Microsoft.Compute/virtualMachineScaleSets",
+              "operator": "GreaterThan",
+              "threshold": 80,
+              "timeAggregation": "Average",
+              "criterionType": "StaticThresholdCriterion"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', 'ag-novatrix-6b')]"
+          }
+        ]
+      },
+      "location": "global",
+      "tags": {
+        "lab": "novatrix-vg",
+        "assignment": "6B"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', 'ag-novatrix-6b')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionRules",
+      "apiVersion": "2023-03-11",
+      "name": "dcr-novatrix-6b",
+      "properties": {
+        "dataSources": {
+          "syslog": [
+            {
+              "name": "syslog",
+              "streams": [
+                "Microsoft-Syslog"
+              ],
+              "facilityNames": [
+                "daemon"
+              ],
+              "logLevels": [
+                "Error",
+                "Critical",
+                "Alert",
+                "Emergency"
+              ]
+            }
+          ]
+        },
+        "destinations": {
+          "logAnalytics": [
+            {
+              "name": "workspace",
+              "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', 'law-novatrix-6b')]"
+            }
+          ]
+        },
+        "dataFlows": [
+          {
+            "streams": [
+              "Microsoft-Syslog"
+            ],
+            "destinations": [
+              "workspace"
+            ]
+          }
+        ]
+      },
+      "location": "[parameters('location')]",
+      "kind": "Linux",
+      "tags": {
+        "lab": "novatrix-vg",
+        "assignment": "6B"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', 'law-novatrix-6b')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachineScaleSets/extensions",
+      "apiVersion": "2024-03-01",
+      "name": "vmss-novatrix-web/AzureMonitorLinuxAgent",
+      "properties": {
+        "publisher": "Microsoft.Azure.Monitor",
+        "type": "AzureMonitorLinuxAgent",
+        "typeHandlerVersion": "1.0",
+        "autoUpgradeMinorVersion": true,
+        "enableAutomaticUpgrade": true,
+        "settings": {
+          "authentication": {
+            "managedIdentity": {
+              "identifier-name": "mi_res_id",
+              "identifier-value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'id-novatrix-app')]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionRuleAssociations",
+      "apiVersion": "2023-03-11",
+      "name": "novatrix-6b-dcr",
+      "properties": {
+        "dataCollectionRuleId": "[resourceId('Microsoft.Insights/dataCollectionRules', 'dcr-novatrix-6b')]"
+      },
+      "scope": "[concat('Microsoft.Compute/virtualMachineScaleSets/vmss-novatrix-web')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/dataCollectionRules', 'dcr-novatrix-6b')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/policyAssignments",
+      "apiVersion": "2023-04-01",
+      "name": "novatrix-6b-lab-tag",
+      "properties": {
+        "displayName": "Novatrix: kr\u00e4ver labbtagg p\u00e5 scale set",
+        "policyDefinitionId": "/providers/Microsoft.Authorization/policyDefinitions/1e30110a-5ceb-460c-a204-c1c3969c6d62",
+        "parameters": {
+          "tagName": {
+            "value": "lab"
+          },
+          "tagValue": {
+            "value": "novatrix-vg"
+          }
+        },
+        "enforcementMode": "Default"
+      },
+      "scope": "[concat('Microsoft.Compute/virtualMachineScaleSets/vmss-novatrix-web')]"
+    }
+  ]
+}
